@@ -1,0 +1,86 @@
+/**
+ * Cliente minimo de la API de GitHub para el job de reconciliacion.
+ *
+ * Existe porque GitHub NO reintenta las entregas de webhook fallidas, y el
+ * reenvio manual solo esta disponible 3 dias. Sin esta red de seguridad, una
+ * caida del servidor de media hora deja un agujero permanente en los datos.
+ */
+
+const API = 'https://api.github.com'
+
+function headers(): HeadersInit {
+  const token = process.env.GITHUB_API_TOKEN
+  if (!token) throw new Error('Falta GITHUB_API_TOKEN')
+  return {
+    authorization: `Bearer ${token}`,
+    accept: 'application/vnd.github+json',
+    'x-github-api-version': '2022-11-28',
+    'user-agent': 'sistema-interno-de-medicion',
+  }
+}
+
+async function get<T>(path: string): Promise<T> {
+  const res = await fetch(`${API}${path}`, { headers: headers(), cache: 'no-store' })
+  if (!res.ok) {
+    throw new Error(`GitHub ${res.status} en ${path}: ${await res.text()}`)
+  }
+  return (await res.json()) as T
+}
+
+export interface OrgRepo {
+  full_name: string
+  archived: boolean
+  pushed_at: string | null
+}
+
+export async function listOrgRepos(org: string): Promise<OrgRepo[]> {
+  const out: OrgRepo[] = []
+  // 100 es el maximo por pagina; se paran en 5 paginas para no agotar la cuota
+  // en organizaciones grandes. Un equipo pequeno no llega ni a la primera.
+  for (let page = 1; page <= 5; page++) {
+    const batch = await get<OrgRepo[]>(
+      `/orgs/${org}/repos?per_page=100&sort=pushed&page=${page}`,
+    )
+    out.push(...batch)
+    if (batch.length < 100) break
+  }
+  return out.filter((r) => !r.archived)
+}
+
+export interface RepoActivity {
+  id: number
+  activity_type: string
+  timestamp: string
+  ref: string | null
+  before: string | null
+  after: string | null
+  actor: { login?: string } | null
+}
+
+/**
+ * GET /repos/{owner}/{repo}/activity.
+ *
+ * Limitacion conocida: devuelve `actor` (la cuenta de GitHub) pero NO los emails
+ * de autor de los commits. Con cuentas compartidas, los eventos recuperados por
+ * aqui solo se pueden atribuir por login. Los que llegan por webhook si traen el
+ * email, asi que esta via es un respaldo, no la fuente principal.
+ *
+ * La retencion de este endpoint no esta documentada; no conviene depender de el
+ * para historicos largos.
+ */
+export async function listRepoActivity(
+  fullName: string,
+  timePeriod: 'day' | 'week' | 'month' = 'week',
+): Promise<RepoActivity[]> {
+  return get<RepoActivity[]>(
+    `/repos/${fullName}/activity?per_page=100&time_period=${timePeriod}`,
+  )
+}
+
+/** Tipos de actividad que nos interesan, mapeados a nuestros `kind`. */
+export const ACTIVITY_KIND: Record<string, 'push' | 'force_push' | 'pr_merged'> = {
+  push: 'push',
+  force_push: 'force_push',
+  pr_merge: 'pr_merged',
+  merge_queue_merge: 'pr_merged',
+}

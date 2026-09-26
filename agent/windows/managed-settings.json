@@ -1,0 +1,33 @@
+{
+  "_comentario": [
+    "Managed settings de Claude Code. Ruta en Windows:",
+    "  C:\\Program Files\\ClaudeCode\\managed-settings.json",
+    "OJO: C:\\ProgramData\\ClaudeCode es la ruta antigua. Quedo deprecada en la",
+    "version 2.1.2 y se elimino en la 2.1.75, asi que no sirve.",
+    "",
+    "El bloque `env` de managed settings gana sobre el entorno del shell y sobre",
+    "la configuracion del usuario. Se fijan tambien los selectores de exporter",
+    "(no solo el endpoint) para que un ajuste local no pueda redirigir los datos.",
+    "",
+    "Lo que NO se pone, a proposito:",
+    "  OTEL_LOG_USER_PROMPTS  -> activaria el envio del texto de los prompts",
+    "  OTEL_LOG_TOOL_DETAILS  -> activaria rutas de archivo y comandos Bash",
+    "Sin ellas, el prompt va redactado y no se registran rutas ni comandos.",
+    "",
+    "El instalador sustituye {{HOSTNAME}}. `host.name` es la clave de atribucion:",
+    "Claude Code no lo envia solo (a diferencia de Codex), y sin el no se puede",
+    "saber de que equipo viene el dato."
+  ],
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318",
+    "OTEL_RESOURCE_ATTRIBUTES": "host.name={{HOSTNAME}}",
+    "OTEL_METRIC_EXPORT_INTERVAL": "60000",
+    "OTEL_LOGS_EXPORT_INTERVAL": "5000",
+    "OTEL_METRICS_INCLUDE_SESSION_ID": "true",
+    "OTEL_METRICS_INCLUDE_VERSION": "true"
+  }
+}

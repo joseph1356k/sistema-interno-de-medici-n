@@ -1,0 +1,31 @@
+# Variante para la Fase 0 (piloto en 1 PC): imprime por consola en vez de enviar.
+#
+# Sirve para confirmar, ANTES de construir el resto, las cosas que la
+# documentacion no aclara:
+#   - si la telemetria funciona con la suscripcion actual de Claude
+#   - si llega `claude_code.active_time.total`
+#   - que trae exactamente `codex.tool_result` en la version instalada
+#   - si OTEL_RESOURCE_ATTRIBUTES afecta a Codex
+#
+# Ejecutar con el filtro DESACTIVADO primero (pipeline `logs/raw`) para ver que
+# manda cada herramienta de verdad, y luego con el filtro para comprobar que lo
+# sensible desaparece.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+
+exporters:
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    metrics/raw:
+      receivers: [otlp]
+      exporters: [debug]
+    logs/raw:
+      receivers: [otlp]
+      exporters: [debug]

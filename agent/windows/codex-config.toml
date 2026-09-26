@@ -1,0 +1,27 @@
+# Seccion [otel] para Codex. Va en el config.toml del usuario:
+#   %USERPROFILE%\.codex\config.toml
+#
+# CLI, app de escritorio y extension de IDE comparten este archivo.
+#
+# Aviso importante sobre Windows: aqui la configuracion es COOPERATIVA, no
+# forzable. El `%ProgramData%\OpenAI\Codex\config.toml` que pone el admin lo
+# puede sobrescribir el usuario, no hay opcion de registro, y el
+# managed_config.toml por usuario se elimino (openai/codex PR #38947). Fijar OTel
+# desde la consola de admin tampoco esta soportado (issue #16248).
+#
+# Consecuencia practica: hay que vigilar en el panel (vista v_device_health) que
+# los equipos sigan reportando, en vez de dar por hecho que la config aguanta.
+#
+# No poner `[analytics] enabled = false`: apaga tambien las metricas OTLP hacia
+# nuestro propio collector.
+
+[otel]
+# `environment` se exporta como atributo de recurso `env`.
+environment = "prod"
+
+# Deja el texto de los prompts fuera. Es el valor por defecto; se escribe
+# explicito para que se vea que es una decision, no un olvido.
+log_user_prompt = false
+
+exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/logs", protocol = "json" } }
+metrics_exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/metrics", protocol = "json" } }

@@ -1,0 +1,93 @@
+# OTel Collector local -- uno por PC, como servicio de Windows.
+#
+# Tiene tres trabajos, en este orden de importancia:
+#   1. Borrar el contenido sensible ANTES de que salga de la maquina. Esto no es
+#      opcional: `codex.tool_result` incluye siempre los argumentos de la
+#      herramienta (comandos, parches, rutas) y 2 KB de su salida, y Codex no
+#      ofrece forma de desactivarlo.
+#   2. Bufferizar en disco cuando no hay red, para que un portatil no pierda
+#      datos al trabajar desconectado.
+#   3. Poner `host.name`, que es la clave de atribucion del sistema.
+#
+# La lista `keep_keys` de abajo tiene que coincidir con src/lib/allowlist.ts.
+# El test tests/allowlist-sync.test.ts falla si se separan.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        # Solo loopback: nadie de la red puede enviar datos falsos a este PC.
+        endpoint: 127.0.0.1:4318
+
+processors:
+  # --- Barrera de privacidad -------------------------------------------------
+  transform/privacy:
+    error_mode: ignore
+    metric_statements:
+      - context: resource
+        statements:
+          - keep_keys(attributes, ["host.name", "service.name", "service.version", "os.type", "os.version", "host.arch", "env"])
+      - context: datapoint
+        statements:
+          - keep_keys(attributes, ["type", "model", "decision", "source", "language", "tool_name", "start_type", "query_source", "effort", "terminal.type", "app.version", "app.entrypoint", "success"])
+    log_statements:
+      - context: resource
+        statements:
+          - keep_keys(attributes, ["host.name", "service.name", "service.version", "os.type", "os.version", "host.arch", "env"])
+      - context: log
+        statements:
+          - keep_keys(attributes, ["event.name", "event_name", "session.id", "conversation.id", "type", "model", "decision", "source", "language", "tool_name", "start_type", "query_source", "effort", "terminal.type", "app.version", "app.entrypoint", "success", "auth_mode", "originator", "slug", "duration_ms", "prompt_length", "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens", "cost_usd", "error_type", "status_code", "mcp_server_name"])
+          # El cuerpo del log solo se conserva si ES un nombre de evento. Texto
+          # libre se vacia aqui, en el PC: podria ser un prompt o una respuesta.
+          - set(body, "") where not IsMatch(body, "^(claude_code|codex)\\.[a-z0-9_.]+$")
+
+  # --- Atribucion ------------------------------------------------------------
+  # Codex pone host.name solo; Claude Code no, y se lo pone su managed-settings.
+  # Esto es la red de seguridad si alguna de las dos cosas falla.
+  resourcedetection:
+    detectors: [system]
+    system:
+      hostname_sources: [os]
+    override: false
+
+  batch:
+    send_batch_size: 200
+    timeout: 30s
+
+exporters:
+  otlphttp/central:
+    endpoint: ${env:INGEST_ENDPOINT}
+    encoding: json
+    headers:
+      authorization: Bearer ${env:INGEST_TOKEN}
+    # Cola en disco: sobrevive a reinicios y a trabajar sin red.
+    sending_queue:
+      enabled: true
+      storage: file_storage/queue
+      num_consumers: 2
+      queue_size: 5000
+    retry_on_failure:
+      enabled: true
+      initial_interval: 10s
+      max_interval: 5m
+      max_elapsed_time: 24h
+
+extensions:
+  file_storage/queue:
+    directory: ${env:ProgramData}\MedicionAgent\queue
+    timeout: 10s
+
+service:
+  extensions: [file_storage/queue]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [transform/privacy, resourcedetection, batch]
+      exporters: [otlphttp/central]
+    logs:
+      receivers: [otlp]
+      processors: [transform/privacy, resourcedetection, batch]
+      exporters: [otlphttp/central]
+  telemetry:
+    logs:
+      level: warn
