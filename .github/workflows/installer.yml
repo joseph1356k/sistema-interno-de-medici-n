@@ -1,0 +1,148 @@
+# Construye el instalador del agente.
+#
+# El .exe se compila aquí y no en el portátil de nadie, para que el binario que se
+# reparte a todos los PCs sea reproducible y auditable.
+#
+# Se ejecuta a mano (workflow_dispatch) o al publicar una etiqueta `agente-vX.Y.Z`.
+
+name: Construir instalador
+
+on:
+  workflow_dispatch:
+    inputs:
+      collector_version:
+        description: 'Versión de otelcol-contrib (vacío = última)'
+        required: false
+        default: ''
+      agent_version:
+        description: 'Versión del agente (ej. 1.0.0)'
+        required: false
+        default: '0.1.0'
+  push:
+    tags:
+      - 'agente-v*'
+
+permissions:
+  contents: read
+
+jobs:
+  # Trabajo aparte y rápido: valida la sintaxis del .iss en cada ejecución, para que
+  # un error de sintaxis no se descubra al final de una construcción larga.
+  validar:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Comprobar que las plantillas referenciadas existen
+        shell: pwsh
+        run: |
+          $requeridos = @(
+            'agent/otelcol/config.yaml',
+            'agent/windows/managed-settings.json',
+            'agent/windows/codex-config.toml',
+            'installer/scripts/configure.ps1',
+            'installer/scripts/revert.ps1',
+            'installer/aviso.txt',
+            'PRIVACY.md'
+          )
+          $faltan = $requeridos | Where-Object { -not (Test-Path $_) }
+          if ($faltan) { throw "Faltan archivos que el instalador referencia: $($faltan -join ', ')" }
+          Write-Host 'Todas las plantillas están presentes.'
+
+      - name: Comprobar la sintaxis de los scripts de PowerShell
+        shell: pwsh
+        run: |
+          $errores = @()
+          Get-ChildItem installer/scripts/*.ps1 | ForEach-Object {
+            $null = [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName, [ref]$null, [ref]$errores)
+            if ($errores) { throw "$($_.Name): $($errores[0].Message)" }
+          }
+          Write-Host 'Scripts de PowerShell sin errores de sintaxis.'
+
+  construir:
+    needs: validar
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolver la versión del collector
+        id: collector
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PEDIDA: ${{ inputs.collector_version }}
+        run: |
+          $v = $env:PEDIDA
+          if ([string]::IsNullOrWhiteSpace($v)) {
+            # Sin versión fija se toma la última. Para producción conviene fijarla,
+            # una vez revisado un binario concreto.
+            $rel = gh api repos/open-telemetry/opentelemetry-collector-releases/releases/latest | ConvertFrom-Json
+            $v = $rel.tag_name
+            Write-Host "Última versión: $v"
+          }
+          $bare = $v.TrimStart('v')
+          "tag=$v"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "bare=$bare" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Descargar el collector y verificar el checksum
+        shell: pwsh
+        env:
+          TAG: ${{ steps.collector.outputs.tag }}
+          BARE: ${{ steps.collector.outputs.bare }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path build/collector | Out-Null
+          $base = "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/$env:TAG"
+          $archivo = "otelcol-contrib_${env:BARE}_windows_amd64.tar.gz"
+
+          Invoke-WebRequest "$base/$archivo" -OutFile "build/$archivo"
+          Invoke-WebRequest "$base/otelcol-contrib_${env:BARE}_checksums.txt" -OutFile build/checksums.txt
+
+          # Se verifica el checksum porque este binario acaba en todos los PCs de la
+          # empresa: descargarlo sin comprobarlo sería confiar en la red.
+          $esperado = (Select-String -Path build/checksums.txt -Pattern ([regex]::Escape($archivo)) |
+                       Select-Object -First 1).Line.Split(' ')[0]
+          if (-not $esperado) { throw "No se encontró el checksum de $archivo" }
+
+          $real = (Get-FileHash "build/$archivo" -Algorithm SHA256).Hash.ToLower()
+          if ($real -ne $esperado.ToLower()) {
+            throw "Checksum distinto. Esperado $esperado, obtenido $real"
+          }
+          Write-Host "Checksum verificado: $real"
+
+          tar -xzf "build/$archivo" -C build/collector
+          if (-not (Test-Path build/collector/otelcol-contrib.exe)) {
+            throw 'El archivo descargado no contiene otelcol-contrib.exe'
+          }
+
+      - name: Compilar el instalador
+        shell: pwsh
+        env:
+          AGENT_VERSION: ${{ inputs.agent_version || '0.1.0' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:AGENT_VERSION
+          # En una etiqueta, la versión sale de la etiqueta.
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $version = '${{ github.ref_name }}' -replace '^agente-v', ''
+          }
+          Write-Host "Versión del agente: $version"
+
+          # Inno Setup viene preinstalado en windows-latest vía Chocolatey.
+          choco install innosetup --no-progress -y
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "No se encontró ISCC en $iscc" }
+
+          & $iscc "/DAgentVersion=$version" "/DCollectorDir=..\build\collector" installer\medicion-agent.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC falló con código $LASTEXITCODE" }
+
+          Get-ChildItem dist
+
+      - name: Publicar el instalador
+        uses: actions/upload-artifact@v4
+        with:
+          name: instalador-agente
+          path: dist/*.exe
+          if-no-files-found: error
+          retention-days: 30

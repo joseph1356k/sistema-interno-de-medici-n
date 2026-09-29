@@ -1,0 +1,80 @@
+# Comprobaciones en cada push: tipos, tests y compilación.
+#
+# Los tests que importan son los de privacidad: verifican que el contenido sensible
+# no llega a la base de datos. Que corran en cada push es lo que hace que la promesa
+# de PRIVACY.md siga siendo cierta con el tiempo.
+
+name: Comprobaciones
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  comprobar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Tipos
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Compilar
+        run: npm run build
+
+  esquema:
+    runs-on: ubuntu-latest
+    # Aplica las migraciones sobre un Postgres limpio y comprueba con aserciones los
+    # valores calculados a mano. Un error de lógica en una vista de agregación no se
+    # nota: produce un número plausible y equivocado.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verificar el esquema
+        env:
+          PGHOST: localhost
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: ./db/verify.sh
+
+      - name: Comprobar que la semilla de demostración aplica
+        env:
+          PGHOST: localhost
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: |
+          psql -q -d postgres -c 'drop database if exists seedcheck'
+          psql -q -d postgres -c 'create database seedcheck'
+          for f in db/migrations/*.sql; do
+            psql -q -v ON_ERROR_STOP=1 -d seedcheck -f "$f"
+          done
+          psql -q -v ON_ERROR_STOP=1 -d seedcheck -f db/seed/demo.sql
+          psql -q -v ON_ERROR_STOP=1 -d seedcheck -f db/seed/clear.sql

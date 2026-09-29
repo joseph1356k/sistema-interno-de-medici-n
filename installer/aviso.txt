@@ -1,0 +1,34 @@
+QUÉ MIDE ESTE AGENTE
+
+Este programa mide el uso de Claude Code y Codex en este equipo, para saber si esas
+herramientas están ayudando y cuánto cuestan.
+
+LO QUE NO HACE:
+
+  - No guarda el texto de tus prompts ni las respuestas del modelo.
+  - No guarda tu código, ni diffs, ni rutas de archivo, ni los comandos que ejecutas.
+  - No hace capturas de pantalla, ni registra pulsaciones de teclas.
+  - No mira qué aplicaciones usas ni qué páginas visitas.
+  - No mide nada fuera de Claude Code, Codex y git.
+
+LO QUE SÍ ENVÍA:
+
+  Contadores y duraciones: tiempo activo, número de sesiones, tokens, coste
+  aproximado, y si aceptaste o rechazaste las ediciones sugeridas.
+
+CÓMO FUNCIONA:
+
+  Un servicio local borra el contenido sensible ANTES de que salga de este equipo.
+  Lo que se envía son números, no texto.
+
+PUEDES COMPROBARLO:
+
+  El archivo PRIVACY.md se instala junto al agente y lista, campo por campo, todo lo
+  que se guarda. El código es auditable.
+
+PUEDES QUITARLO:
+
+  Desde "Aplicaciones instaladas", como cualquier otro programa. Lo revierte todo.
+
+Si esto es la primera vez que te enteras de este sistema, para y habla con quien te
+lo pidió antes de instalarlo. Debería habértelo explicado antes.
