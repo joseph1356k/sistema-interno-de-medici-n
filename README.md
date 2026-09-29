@@ -1,187 +1,116 @@
 # Sistema interno de medición
 
 Mide **adopción de herramientas de IA** (Claude Code, Codex) y **ritmo de entrega**
-(push, PRs, merges, revisiones) por persona, en un equipo donde las cuentas de
-Claude son compartidas.
+(DORA, tiempo de ciclo, revisión, CI) en un equipo donde las cuentas de Claude son
+compartidas.
 
-No captura contenido: ni prompts, ni código, ni rutas, ni pulsaciones, ni
-capturas, ni títulos de ventana, ni URLs. Ver [`PRIVACY.md`](PRIVACY.md) para la
-lista literal de lo que sí se guarda, y
-[`docs/transparencia.md`](docs/transparencia.md) para el documento que se entrega
-al equipo **antes** de instalar nada.
+No captura contenido: ni prompts, ni código, ni rutas, ni pulsaciones, ni capturas,
+ni títulos de ventana, ni URLs. La lista literal de lo que sí se guarda está en
+[`PRIVACY.md`](PRIVACY.md), y un test falla si ese documento se queda corto.
+
+**Panel:** `https://medicion-interna-jose-david-s-projects-22dd4300.vercel.app`
+**Para terminar de arrancarlo:** [`docs/puesta-en-marcha.md`](docs/puesta-en-marcha.md)
+
+---
 
 ## Cómo funciona
 
 ```
-  PC Windows                                   Servidor
+  PC Windows                                        Servidor (Vercel)
   ├─ Claude Code ──OTel──┐
-  ├─ Codex ─────────OTel─┤                      Next.js en Vercel
+  ├─ Codex ─────────OTel─┤
   └─ OTel Collector local ├── OTLP/HTTP JSON ──►  /api/ingest/otlp    ──► Postgres
-       · borra el contenido sensible                                      (Supabase)
-       · bufferiza sin red                    GitHub ──webhook──────────►  /api/ingest/github
-       · pone host.name                                                    /api/cron/reconcile
+       · borra el contenido sensible                                       (Supabase)
+       · bufferiza sin red                    GitHub ──webhook────────►  /api/ingest/github
+       · pone host.name                                                  /api/cron/daily
 ```
 
-Dos ideas sostienen el diseño:
+Tres ideas sostienen el diseño:
 
-1. **La atribución va por equipo, no por cuenta.** Un PC = una persona
-   (`host.name`). Es la única forma de distinguir personas cuando la cuenta de
-   Claude es compartida. La tabla `people` es el único sitio donde vive un nombre.
+1. **La atribución va por equipo, no por cuenta.** Un PC = una persona (`host.name`).
+   Es la única forma de distinguir personas cuando la cuenta de Claude es compartida.
+   La tabla `people` es el único sitio donde vive un nombre.
 2. **El contenido se borra en el PC, no en el servidor.** El collector local es
    obligatorio porque `codex.tool_result` envía siempre los argumentos de las
    herramientas y 2 KB de su salida, y Codex no ofrece forma de desactivarlo.
+3. **Los webhooks son la única fuente realmente en tiempo real.** La telemetría de
+   herramientas se exporta cada 60 s, así que el panel no finge ser más fresco que
+   eso y muestra la antigüedad del dato.
+
+---
+
+## Las seis vistas
+
+| Vista | Qué responde |
+|---|---|
+| **Ahora** | ¿Qué le pasa al trabajo? PRs por motivo de bloqueo y cuánto llevan así, CI, actividad de hoy, alertas |
+| **Entrega** | DORA, tiempo de ciclo desglosado, WIP, tamaño de PR contra velocidad de revisión |
+| **Revisión y CI** | Carga de revisión, quién revisa a quién, salud de CI, tests inestables |
+| **IA y coste** | Uso, aceptación de ediciones, **coste por PR mergeado**, adopción |
+| **Proyecciones** | Throughput por Monte Carlo, coste a fin de mes, tendencias |
+| **Salud** | ¿Me puedo creer estos datos? Equipos reportando, actividad sin atribuir |
+
+### Lo que el panel hace a propósito
+
+- **No hay indicador de «activo ahora» por persona.** La telemetría solo ve Claude
+  Code y Codex, así que marcaría como inactivo a quien lee, piensa o está en una
+  reunión. Sería mentir con datos.
+- **La tabla por persona está en orden alfabético**, nunca por métrica. Ordenarla por
+  horas la convertiría en un ranking.
+- **Es simétrico:** una contraseña, todo el equipo ve los mismos datos. Si solo los ve
+  quien manda, es vigilancia; si los ve todo el equipo, es información compartida.
+- **Las proyecciones se niegan a proyectar** con menos de 6 semanas de datos, y la
+  tendencia dice «sin tendencia clara» cuando el ajuste es malo en vez de afirmar una
+  mejora que no está en los datos.
+
+---
 
 ## Antes de empezar: dos cosas que ahorran trabajo
 
 **Compartir cuentas de Claude va contra los [términos de
-Anthropic](https://www.anthropic.com/legal/consumer-terms)** ("You may not share
-your Account login information... with anyone else"). Un plan **Team** (una silla
-por persona) es compatible **y** ya trae analíticas de uso por persona: panel de
-uso, [panel específico de Claude Code](https://code.claude.com/docs/en/analytics)
-con ranking y export CSV, y en Enterprise una Analytics API. Con eso, la mitad de
-este sistema deja de hacer falta. Merece la pena valorarlo antes de desplegar.
+Anthropic](https://www.anthropic.com/legal/consumer-terms)** («You may not share your
+Account login information... with anyone else»). Un plan **Team** (una silla por
+persona) es compatible **y** ya trae analíticas de uso por persona: panel de uso,
+[panel específico de Claude Code](https://code.claude.com/docs/en/analytics) con
+ranking y export CSV, y en Enterprise una Analytics API. Con eso, buena parte de este
+sistema deja de hacer falta.
 
 **Las métricas de git ya existen hechas.** Si solo interesa esa parte,
-[Middleware](https://github.com/middlewarehq/middleware) (Apache-2.0) da DORA y
-tiempo de ciclo de PR en una imagen Docker.
+[Middleware](https://github.com/middlewarehq/middleware) da DORA y tiempo de ciclo en
+una imagen Docker.
 
-## Fase 0: piloto en 1 PC (hacer esto primero)
+---
 
-Hay cosas que la documentación de los proveedores no aclara y que conviene
-confirmar **antes** de construir el resto:
+## Estructura
 
-- ¿Funciona la telemetría de Claude Code con la suscripción que usáis? (las docs
-  lo confirman para OAuth, pero no hay una frase explícita para Pro/Max)
-- ¿Llega `claude_code.active_time.total`?
-- ¿Qué trae exactamente `codex.tool_result` en la versión instalada?
-- ¿Afecta `OTEL_RESOURCE_ATTRIBUTES` a Codex? (probablemente sí, sin verificar)
-
-Cómo:
-
-1. Descarga `otelcol-contrib` para `windows_amd64` de las
-   [releases oficiales](https://github.com/open-telemetry/opentelemetry-collector-releases/releases).
-2. Ejecútalo con [`agent/otelcol/config.debug.yaml`](agent/otelcol/config.debug.yaml),
-   que imprime por consola en vez de enviar.
-3. Configura Claude Code y Codex apuntando a `http://127.0.0.1:4318`.
-4. Trabaja media hora normal y mira la salida.
-
-**No sigas hasta que esto funcione.** Si algo no aparece, el resto del sistema no
-lo va a arreglar.
-
-## Despliegue
-
-### 1. Base de datos
-
-Crea un proyecto en Supabase y aplica las migraciones en orden:
-
-```bash
-psql "$DATABASE_URL" -f db/migrations/0001_init.sql
-psql "$DATABASE_URL" -f db/migrations/0002_views.sql
+```
+src/lib/
+  allowlist.ts      ← barrera de privacidad. Lo que no está aquí no se guarda
+  otlp.ts           parser de OTLP/HTTP JSON
+  github.ts         firma HMAC y eventos históricos
+  github-events.ts  estado de PR, CI, revisiones, despliegues
+  pr-state.ts       fusión tolerante a webhooks desordenados
+  live.ts           cálculo del tablero en vivo
+  forecast.ts       Monte Carlo y tendencias
+  analytics.ts      cargadores de las vistas
+  jobs.ts           trabajos programados
+db/
+  migrations/       7 migraciones
+  verify.sh         aplica el esquema y comprueba los cálculos con aserciones
+  seed/demo.sql     16 semanas de datos de demostración
+installer/
+  medicion-agent.iss  produce UN .exe con el collector dentro
+agent/otelcol/      configuración del collector, con el filtro de privacidad
 ```
 
-Registra a las personas y sus identidades:
-
-```sql
-insert into people (display_name, git_emails, github_login) values
-  ('Ana García',  array['ana@empresa.com'],  'anagarcia'),
-  ('Luis Pérez',  array['luis@empresa.com'], null);
-
--- Un PC = una persona.
-insert into devices (hostname, person_id, os)
-select 'pc-07', id, 'Windows 11' from people where display_name = 'Ana García';
-```
-
-### 2. Servidor
-
-Despliega en Vercel con estas variables (ver [`.env.example`](.env.example)):
-
-| Variable | Para qué |
-|---|---|
-| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Base de datos |
-| `INGEST_TOKEN` | Token que presenta el collector de cada PC |
-| `GITHUB_WEBHOOK_SECRET` | Secreto del webhook |
-| `GITHUB_API_TOKEN`, `GITHUB_ORG` | Job de reconciliación |
-| `DASHBOARD_PASSWORD` | Acceso al panel |
-| `CRON_SECRET` | Protege el cron (opcional pero recomendado) |
-
-Sin `DASHBOARD_PASSWORD` el panel no sirve nada: es a propósito, para que un
-despliegue a medias no deje datos por persona accesibles.
-
-### 3. GitHub
-
-Webhook a nivel de **organización** (hace falta ser owner):
-
-- URL: `https://TU-DOMINIO/api/ingest/github`
-- Content type: `application/json`
-- Secret: el mismo valor de `GITHUB_WEBHOOK_SECRET`
-- Eventos: **Pushes**, **Pull requests**, **Pull request reviews**
-
-Y que **cada programador configure un email de git distinto**, incluso si la
-cuenta de GitHub es compartida — es lo que permite atribuir push y commits:
-
-```bash
-git config --global user.email ana@empresa.com
-```
-
-El cron de reconciliación (`vercel.json`) rellena a diario lo que no llegó por
-webhook. Hace falta porque GitHub no reintenta las entregas fallidas y el reenvío
-manual solo está disponible 3 días.
-
-### 4. Los PCs
-
-**Primero entrega [`docs/transparencia.md`](docs/transparencia.md) al equipo.**
-El sistema está diseñado para ser declarado; instalarlo en silencio lo convierte
-en otra cosa, y según el país puede ser además un requisito legal informar antes.
-
-Luego, en cada PC, como Administrador:
-
-```powershell
-# El binario del collector se coloca a mano a proposito: conviene revisar lo que
-# se instala en todos los PCs en vez de bajarlo a ciegas.
-# Copialo en C:\ProgramData\MedicionAgent\otelcol-contrib.exe
-
-.\agent\windows\install.ps1 `
-  -IngestEndpoint https://TU-DOMINIO/api/ingest/otlp `
-  -IngestToken   '<INGEST_TOKEN>' `
-  -DeviceName    pc-07
-```
-
-Para revertirlo todo: `.\agent\windows\uninstall.ps1`.
-
-## Límites conocidos
-
-Conviene tenerlos claros de antemano:
-
-- **Codex en Windows no se puede forzar.** El usuario puede sobrescribir la
-  configuración del admin, no hay opción de registro, y el `managed_config.toml`
-  por usuario se eliminó ([PR #38947](https://github.com/openai/codex/pull/38947)).
-  Fijar OTel desde la consola de admin tampoco está soportado
-  ([issue #16248](https://github.com/openai/codex/issues/16248)). La vista
-  `v_device_health` y la sección "Salud del sistema" del panel existen para
-  vigilarlo.
-- **Claude Code sí se puede forzar** vía `managed-settings.json`, pero alguien con
-  admin local puede editarlo.
-- **El tiempo de Codex es estimado**, no medido: Codex no expone una métrica de
-  tiempo activo, así que se deriva sumando huecos entre eventos con un tope de
-  5 min. El panel lo etiqueta como estimación; no debe compararse de tú a tú con
-  `active_time.total` de Claude Code.
-- **La app de escritorio de Codex no exporta logs**
-  ([issue #28810](https://github.com/openai/codex/issues/28810)), así que ese uso
-  puede quedar subcontado. Igual `codex exec` no exporta tokens
-  ([issue #33668](https://github.com/openai/codex/issues/33668)).
-- **No se mide el chat de Claude en navegador ni en la app de escritorio**, ni el
-  tiempo en github.com. Medirlo requeriría un monitor de ventanas, que se decidió
-  no incluir (el razonamiento está en el plan y en `docs/transparencia.md`).
-- **Las cifras de coste son aproximaciones** según la documentación de Anthropic.
-- El endpoint `/activity` de GitHub no documenta su retención, así que no conviene
-  depender de él para históricos largos.
+---
 
 ## Desarrollo
 
 ```bash
 npm install
-npm run check     # typecheck + tests
-npm test          # 87 tests
+npm run check        # tipos + 148 tests
+./db/verify.sh       # esquema y cálculos, contra un Postgres local
 npm run dev
 ```
 
@@ -189,26 +118,64 @@ Los tests que importan:
 
 | Archivo | Qué garantiza |
 |---|---|
-| `tests/privacy.test.ts` | Inyecta un marcador en todos los campos sensibles posibles y verifica que no sobrevive |
+| `tests/privacy.test.ts` | Inyecta un marcador en todos los campos sensibles y verifica que no sobrevive |
 | `tests/routes.test.ts` | Que lo que **llega a la tabla** no contiene contenido |
+| `tests/pr-state.test.ts` | Que una secuencia **desordenada** de webhooks deja el estado correcto |
+| `tests/forecast.test.ts` | Que las proyecciones se **niegan** con pocos datos, y que los percentiles no se invierten |
 | `tests/allowlist-sync.test.ts` | Que el filtro del PC y el del servidor no se han separado, y que `PRIVACY.md` no miente por omisión |
-| `tests/github.test.ts` | Firma HMAC con el vector oficial de GitHub, y atribución con cuentas compartidas |
+| `db/verify.sql` | Valores de cada métrica comprobados a mano una vez, fijados como aserciones |
 
-Si cambias [`src/lib/allowlist.ts`](src/lib/allowlist.ts), hay que actualizar en el
+**Si cambias [`src/lib/allowlist.ts`](src/lib/allowlist.ts)**, hay que actualizar en el
 mismo commit `agent/otelcol/config.yaml` y `PRIVACY.md`. Los tests fallan si no.
+
+---
+
+## Límites conocidos
+
+Conviene tenerlos claros de antemano:
+
+- **Codex en Windows no se puede forzar.** El usuario puede sobrescribir la
+  configuración del admin, no hay opción de registro, y el `managed_config.toml` por
+  usuario se eliminó ([PR #38947](https://github.com/openai/codex/pull/38947)). Fijar
+  OTel desde la consola de admin tampoco está soportado ([issue
+  #16248](https://github.com/openai/codex/issues/16248)). La vista **Salud** existe
+  para vigilarlo.
+- **El tiempo de Codex es estimado**, no medido: Codex no expone métrica de tiempo
+  activo, así que se deriva sumando huecos entre eventos con un tope de 5 minutos. El
+  panel lo etiqueta como estimación.
+- **La app de escritorio de Codex no exporta registros** ([issue
+  #28810](https://github.com/openai/codex/issues/28810)), así que ese uso puede quedar
+  subcontado. Igual `codex exec` no exporta tokens ([issue
+  #33668](https://github.com/openai/codex/issues/33668)).
+- **No se mide el chat de Claude en navegador ni en la app de escritorio**, ni el
+  tiempo en github.com. Requeriría un monitor de ventanas, que se decidió no instalar:
+  su servidor no tiene autenticación, el instalador de Windows es por usuario y se
+  desactiva en dos clics, y la extensión no existe para Edge.
+- **`mergeable_state` llega nulo casi siempre** por webhook, porque GitHub lo calcula
+  aparte. Hace falta `GITHUB_API_TOKEN` para refrescarlo; sin él el tablero no
+  distingue un conflicto de un CI en rojo.
+- **Los intentos de CI se cuentan sobre el commit final** de cada PR, no sobre los
+  anteriores, así que la cifra es un mínimo.
+- **Las cifras de coste son aproximaciones** que reporta la propia herramienta.
+- **El plan Hobby de Vercel solo admite crons diarios.** El tablero se refresca en cada
+  webhook, así que el cron solo es la red de seguridad.
+
+---
 
 ## Cómo leer los números
 
-Push por día, tiempo entre push y horas en una herramienta son métricas de
-**flujo**, no de rendimiento. Son fáciles de inflar (partir commits, dejar
-sesiones abiertas) y castigan justo el trabajo difícil: refactors grandes,
-depuración, pensar antes de escribir.
+Push por día, tiempo entre push y horas en una herramienta son métricas de **flujo**,
+no de rendimiento. Son fáciles de inflar y castigan justo el trabajo difícil:
+refactors grandes, depuración, pensar antes de escribir.
 
-- **A nivel de equipo y de tendencia.** "Los PR tardan 4 días en mergearse" es
-  accionable; "Ana hizo 12 push y Luis 7" no dice nada. Por eso la tabla por
-  persona del panel está ordenada alfabéticamente y no por ninguna métrica.
-- **Para ROI de herramientas**, que sí es una pregunta legítima por persona: ¿vale
-  lo que cuesta? ¿a alguien le vendría bien formación?
+- **A nivel de equipo y de tendencia.** «Los PR tardan 4 días en mergearse» es
+  accionable; «Ana hizo 12 push y Luis 7» no dice nada.
+- **Para ROI de herramientas**, que sí es una pregunta legítima por persona: el **coste
+  por PR mergeado** es la cifra que la responde.
 - **Para detectar bloqueos.** Un PR abierto 10 días es un problema de proceso.
-- **Siempre junto a una señal de calidad**: la tasa de aceptación de ediciones
-  (`code_edit_tool.decision`) está en el panel por este motivo.
+- **Siempre junto a una señal de calidad**: tasa de aceptación de ediciones,
+  retrabajo, PRs abandonados.
+
+Y **entrega [`docs/transparencia.md`](docs/transparencia.md) al equipo antes de
+instalar nada.** El sistema está diseñado para ser declarado; instalarlo en silencio lo
+convierte en otra cosa, y según el país informar puede ser además un requisito legal.

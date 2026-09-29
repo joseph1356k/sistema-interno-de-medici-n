@@ -85,16 +85,71 @@ la herramienta cambió de formato.
 
 ### Actividad de git (viene de GitHub, no de tu PC)
 
+Todo lo de esta sección son metadatos que ya son visibles para cualquiera con acceso
+al repositorio. Se guardan organizados, no se descubre nada nuevo.
+
 | Campo | Qué es |
 |---|---|
 | `repo` | Repositorio. |
 | `actor_login` | Cuenta de GitHub que disparó el evento. |
 | `author_email` | Email de autor de los commits (de tu `git config user.email`). Es lo que permite distinguir personas cuando la cuenta de GitHub es compartida. |
-| `ref` | Rama. |
-| `commit_count`, `additions`, `deletions`, `changed_files` | Tamaño del cambio en números. **No el contenido del cambio.** |
-| `pr_number`, `pr_created_at`, `pr_merged_at`, `review_state` | Fechas y estado de PRs y revisiones. |
+| `ref`, `base_ref` | Rama. |
+| `commit_count`, `additions`, `deletions`, `changed_files`, `commits` | Tamaño del cambio en números. **No el contenido del cambio.** |
+| `head_sha` | Identificador del commit. Sirve para cruzar un PR con su resultado de CI. |
 
-No se guardan mensajes de commit ni diffs.
+**No se guardan mensajes de commit, ni títulos de PR, ni diffs.** El panel enlaza a
+GitHub para el contenido, que es donde ya vive y donde ya hay permisos.
+
+### Estado de los pull requests
+
+Necesario para el tablero en vivo: saber qué está bloqueado ahora no se puede
+deducir sumando hechos pasados.
+
+| Campo | Qué es |
+|---|---|
+| `number`, `state`, `draft` | Número del PR, si está abierto/cerrado/mergeado, si es borrador. |
+| `mergeable`, `mergeable_state` | Si se puede mergear, y qué lo impide (conflicto, CI en rojo, bloqueado). |
+| `requested_reviewers` | **Cuántos** revisores hay pedidos, no quiénes. |
+| `last_review_state` | Veredicto de la última revisión: aprobado, cambios pedidos, comentado. |
+| `created_at`, `ready_at`, `first_review_at`, `approved_at`, `merged_at`, `closed_at` | Los hitos del ciclo. Son lo que permite ver **dónde** se atasca el trabajo. |
+
+### Revisiones
+
+| Campo | Qué es |
+|---|---|
+| `reviewer_login`, `pr_author_login` | Quién revisó y a quién. |
+| `state` | Aprobado, cambios pedidos, comentado, descartado. |
+| `submitted_at` | Cuándo. |
+
+De los comentarios de revisión se guarda **quién** y **cuándo**, nunca el texto. Solo
+se cuentan, para medir profundidad de revisión.
+
+### CI y despliegues
+
+| Campo | Qué es |
+|---|---|
+| `name`, `branch`, `status`, `conclusion` | Nombre del workflow y su resultado. |
+| `attempt`, `started_at`, `completed_at`, `duration_seconds` | Intento y duración. |
+| `environment`, `ref`, `is_rollback` | Entorno de despliegue y si fue una reversión. |
+
+No se guardan registros de ejecución ni salidas de CI.
+
+### Archivos retocados (opcional, desactivable)
+
+Para medir retrabajo hace falta saber qué archivos se vuelven a tocar. Las rutas de
+archivo están en la lista de lo que nunca se guarda, así que se guarda un **HMAC de
+la ruta con una sal secreta**, nunca la ruta:
+
+| Campo | Qué es |
+|---|---|
+| `path_hash` | HMAC-SHA256 de la ruta. Permite contar «este archivo se retocó» sin que la base de datos contenga ninguna ruta. |
+| `change_type` | Añadido, modificado o eliminado. |
+
+Es **opcional**: sin `FILE_HASH_SALT` configurada no se recoge nada, y el panel dice
+que está desactivado en vez de mostrar un cero engañoso.
+
+Límite honesto: quien tenga la sal **y** acceso al repositorio puede rehacer los
+hashes y deducir los archivos. Protege la base de datos, no es anonimato fuerte.
 
 ## Cuánto tiempo se guarda
 
@@ -115,14 +170,30 @@ No se guardan mensajes de commit ni diffs.
 enviados siguen en el servidor; para que se borren, pídelo a quien administre el
 panel.
 
+## Quién puede leer la base de datos
+
+Solo el servidor del panel. Las tablas tienen las políticas de acceso activadas sin
+ninguna excepción, y las claves públicas de Supabase no tienen permiso sobre ninguna
+tabla ni vista. Está verificado asumiendo el rol público y comprobando que no puede
+leer nada.
+
+Esto importa porque, por defecto, Supabase deja cualquier tabla accesible a quien
+tenga la clave anónima, que es pública por diseño.
+
 ## Cómo comprobar que esto es verdad
 
 ```bash
-npm test          # incluye el test de privacidad
+npm test          # tipos y 148 tests
+./db/verify.sh    # aplica el esquema y comprueba los cálculos
 ```
 
-El test `tests/privacy.test.ts` inyecta un marcador único en todos los campos
-sensibles posibles —incluidos los argumentos y la salida de `codex.tool_result`—
-y verifica que ese marcador no aparece en ninguna parte del resultado.
-`tests/allowlist-sync.test.ts` verifica que el filtro del PC y el del servidor no
-se han separado.
+Los tests que respaldan este documento:
+
+| Test | Qué garantiza |
+|---|---|
+| `tests/privacy.test.ts` | Inyecta un marcador único en todos los campos sensibles posibles —incluidos los argumentos y la salida de `codex.tool_result`— y verifica que no aparece en el resultado |
+| `tests/routes.test.ts` | Que lo que **llega a la tabla** no contiene contenido, ni mensajes de commit |
+| `tests/allowlist-sync.test.ts` | Que el filtro del PC y el del servidor no se han separado, y que **este documento no miente por omisión**: falla si se guarda un campo que no esté listado aquí |
+
+Ese último test es el que hace que este documento siga siendo cierto con el tiempo.
+Corren todos en cada push (`.github/workflows/ci.yml`).
