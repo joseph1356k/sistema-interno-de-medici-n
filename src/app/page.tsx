@@ -1,277 +1,310 @@
-import Link from 'next/link'
-import { Kpi, Status, TrendLine, duration, fmt } from './components'
-import { loadDeviceHealth, loadPeople, loadTeamSummary } from '@/lib/metrics'
+import {
+  AutoRefresh,
+  DemoBanner,
+  ErrorCard,
+  Kpi,
+  Nav,
+  PageHeader,
+  ReadingNote,
+  Section,
+  Status,
+  duration,
+  fmt,
+  int,
+} from './components'
+import { readSnapshot, refreshSnapshot, type LiveSnapshot } from '@/lib/live'
+import type { BlockReason } from '@/lib/pr-state'
 
+// Sin caché: es la única vista que tiene que estar fresca.
 export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
-const WINDOW = 30
+const REASON_LABEL: Record<BlockReason, string> = {
+  conflict: 'Con conflicto',
+  ci_red: 'CI en rojo',
+  changes_requested: 'Cambios pedidos',
+  awaiting_review: 'Esperando revisión',
+  ready_to_merge: 'Listo para mergear',
+  draft: 'En borrador',
+}
 
-export default async function TeamDashboard() {
-  let summary
-  let people
-  let devices
+const REASON_TONE: Record<BlockReason, string> = {
+  conflict: 'reason-blocking',
+  ci_red: 'reason-blocking',
+  changes_requested: 'reason-waiting',
+  awaiting_review: 'reason-waiting',
+  ready_to_merge: 'reason-ok',
+  draft: '',
+}
+
+/** Orden de atención: lo que bloquea de verdad primero. */
+const REASON_ORDER: BlockReason[] = [
+  'conflict',
+  'ci_red',
+  'changes_requested',
+  'awaiting_review',
+  'ready_to_merge',
+  'draft',
+]
+
+function compare(today: number, average: number): { text: string; cls: string } {
+  if (average <= 0) return { text: 'sin referencia', cls: 'trend-flat' }
+  const ratio = today / average
+  if (ratio >= 1.15) return { text: `${fmt(ratio, 1)}× la media`, cls: 'trend-up' }
+  if (ratio <= 0.85) return { text: `${fmt(ratio, 1)}× la media`, cls: 'trend-down' }
+  return { text: 'en su media', cls: 'trend-flat' }
+}
+
+export default async function AhoraPage() {
+  let snapshot: LiveSnapshot | null = null
+  let error: unknown = null
 
   try {
-    ;[summary, people, devices] = await Promise.all([
-      loadTeamSummary(WINDOW),
-      loadPeople(WINDOW),
-      loadDeviceHealth(),
-    ])
+    // Si nunca se calculó (primer arranque), se calcula ahora.
+    snapshot = (await readSnapshot()) ?? (await refreshSnapshot())
   } catch (e) {
+    error = e
+  }
+
+  if (error || !snapshot) {
     return (
       <main>
-        <h1>Medición interna</h1>
-        <div className="card">
-          <p>
-            No se pudo leer la base de datos. Revisa <code>SUPABASE_URL</code> y{' '}
-            <code>SUPABASE_SERVICE_ROLE_KEY</code>, y que las migraciones de{' '}
-            <code>db/migrations/</code> estén aplicadas.
-          </p>
-          <p className="error">{String(e)}</p>
-        </div>
+        <Nav current="/" />
+        <PageHeader title="Ahora" />
+        <ErrorCard error={error ?? 'sin datos'} />
       </main>
     )
   }
 
+  const s = snapshot
+  const hoursToday = s.team_today.claude_hours
+  const hoursCmp = compare(hoursToday, s.trailing_avg.claude_hours)
+  const pushCmp = compare(s.team_today.pushes, s.trailing_avg.pushes)
+
   return (
     <main>
-      <h1>Medición interna</h1>
-      <p className="lede">
-        Adopción de herramientas y ritmo de entrega. Últimos {WINDOW} días. Todo el
-        equipo ve los mismos datos. Qué se guarda y qué no:{' '}
-        <a href="https://github.com/joseph1356k/sistema-interno-de-medici-n/blob/main/PRIVACY.md">
-          PRIVACY.md
-        </a>
-        .
-      </p>
+      <AutoRefresh seconds={60} />
+      <Nav current="/" />
+      {s.is_demo ? <DemoBanner /> : null}
 
-      <div className="kpis">
-        <Kpi
-          label="Tiempo en Claude Code"
-          value={fmt(summary.claudeHours, 0)}
-          unit="h"
-          note="Tiempo activo medido por la herramienta"
-        />
-        <Kpi
-          label="Tiempo en Codex"
-          value={fmt(summary.codexHoursEst, 0)}
-          unit="h"
-          note="Estimado: Codex no mide tiempo activo"
-        />
-        <Kpi
-          label="Coste de herramientas"
-          value={`$${fmt(summary.costUsd, 0)}`}
-          note="Aproximado, según la propia herramienta"
-        />
-        <Kpi
-          label="PR abierto a merge"
-          value={duration(summary.medianMergeHours)}
-          note="Mediana del equipo"
-        />
-        <Kpi
-          label="Espera a primera revisión"
-          value={duration(summary.medianFirstReviewHours)}
-          note="Mediana del equipo"
-        />
-        <Kpi
-          label="Entre push y push"
-          value={duration(summary.medianPushIntervalHours)}
-          note="Mediana del equipo"
-        />
-      </div>
+      <PageHeader
+        title="Ahora"
+        lede="Qué le pasa al trabajo en curso."
+        computedAt={s.computed_at}
+      />
 
-      <h2>Tiempo de PR abierto a merge, por semana</h2>
-      <div className="card">
-        <TrendLine
-          points={summary.openToMergeTrend}
-          label="Mediana semanal de horas desde que se abre un PR hasta que se mergea"
-        />
-        {summary.openToMergeTrend.length >= 2 ? (
-          <table style={{ marginTop: 18 }}>
-            <caption>Los mismos datos del gráfico, en tabla.</caption>
-            <thead>
-              <tr>
-                <th scope="col">Semana del</th>
-                <th scope="col">Mediana</th>
-                <th scope="col">PR mergeados</th>
-              </tr>
-            </thead>
-            <tbody>
-              {summary.openToMergeTrend.map((p) => (
-                <tr key={p.week}>
-                  <td>{p.week}</td>
-                  <td className="num">{duration(p.medianHours)}</td>
-                  <td className="num">{p.count}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : null}
-      </div>
-      <p className="note">
-        Esta es la métrica que de verdad dice si el proceso mejora. Un PR que tarda
-        días en mergearse es un problema de proceso, no de quien lo abrió.
-      </p>
+      {s.alerts.length > 0 ? (
+        <Section title={`Atención (${s.alerts.length})`}>
+          <div className="alerts">
+            {s.alerts.map((a, i) => (
+              <div key={i} className={`alert alert-${a.severity}`}>
+                <Status kind={a.severity === 'critical' ? 'critical' : 'warning'}>
+                  {a.severity === 'critical' ? 'Crítico' : 'Aviso'}
+                </Status>
+                <span>{a.message}</span>
+              </div>
+            ))}
+          </div>
+        </Section>
+      ) : (
+        <Section title="Atención">
+          <div className="card">
+            <Status kind="good">Nada atascado ahora mismo</Status>
+          </div>
+        </Section>
+      )}
 
-      <h2>Por persona</h2>
-      <div className="card">
-        <table>
-          <caption>
-            Orden alfabético, no por ninguna métrica. Esta tabla no es un ranking:
-            los push y las horas son medidas de flujo, fáciles de inflar y malas
-            para juzgar a nadie.
-          </caption>
-          <thead>
-            <tr>
-              <th scope="col">Persona</th>
-              <th scope="col">Claude</th>
-              <th scope="col">Codex (est.)</th>
-              <th scope="col">Push</th>
-              <th scope="col">Commits</th>
-              <th scope="col">PR mergeados</th>
-              <th scope="col">Aceptación</th>
-            </tr>
-          </thead>
-          <tbody>
-            {people.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="empty">
-                  Todavía no hay nadie registrado. Añade filas a la tabla{' '}
-                  <code>people</code> y asigna equipos en <code>devices</code>.
-                </td>
-              </tr>
-            ) : (
-              people.map((p) => (
-                <tr key={p.person_id ?? p.display_name}>
-                  <td>
-                    {p.person_id ? (
-                      <Link href={`/persona/${p.person_id}`}>{p.display_name}</Link>
-                    ) : (
-                      p.display_name
-                    )}
-                  </td>
-                  <td className={`num ${p.claude_hours ? '' : 'zero'}`}>
-                    {p.claude_hours ? `${fmt(p.claude_hours, 1)} h` : '—'}
-                  </td>
-                  <td className={`num ${p.codex_hours_est ? '' : 'zero'}`}>
-                    {p.codex_hours_est ? `${fmt(p.codex_hours_est, 1)} h` : '—'}
-                  </td>
-                  <td className={`num ${p.pushes ? '' : 'zero'}`}>{p.pushes || '—'}</td>
-                  <td className={`num ${p.commits ? '' : 'zero'}`}>
-                    {p.commits || '—'}
-                  </td>
-                  <td className={`num ${p.prs_merged ? '' : 'zero'}`}>
-                    {p.prs_merged || '—'}
-                  </td>
-                  <td className="num">
-                    {p.accept_rate === null
-                      ? '—'
-                      : `${Math.round(p.accept_rate * 100)} %`}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+      <Section
+        title="Pull requests abiertos"
+        hint="Agrupados por qué los bloquea. El orden es el de atención: lo que impide avanzar primero."
+      >
+        <div className="reason-grid">
+          {REASON_ORDER.map((reason) => (
+            <div key={reason} className={`reason ${REASON_TONE[reason]}`}>
+              <div className="reason-count">{s.by_reason[reason]}</div>
+              <div className="reason-label">{REASON_LABEL[reason]}</div>
+            </div>
+          ))}
+        </div>
 
-      <h2>Salud del sistema</h2>
-      <div className="card">
-        <table>
-          <caption>
-            Qué equipos están reportando. En Windows la configuración de Codex es
-            cooperativa: el usuario puede sobrescribirla, así que hay que mirarlo en
-            vez de darlo por hecho.
-          </caption>
-          <thead>
-            <tr>
-              <th scope="col">Equipo</th>
-              <th scope="col">Asignado a</th>
-              <th scope="col">Claude Code</th>
-              <th scope="col">Codex</th>
-              <th scope="col">Visto por última vez</th>
-            </tr>
-          </thead>
-          <tbody>
-            {devices.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="empty">
-                  Ningún equipo ha reportado todavía.
-                </td>
-              </tr>
-            ) : (
-              devices.map((d) => (
-                <tr key={d.hostname}>
-                  <td>
-                    <code>{d.hostname}</code>
-                  </td>
-                  <td>
-                    {d.display_name ?? (
-                      <Status kind="warning">Sin asignar</Status>
-                    )}
-                  </td>
-                  <td>
-                    {d.claude_reporting ? (
-                      <Status kind="good">Reportando</Status>
-                    ) : (
-                      <Status kind="critical">Sin datos</Status>
-                    )}
-                  </td>
-                  <td>
-                    {d.codex_reporting ? (
-                      <Status kind="good">Reportando</Status>
-                    ) : (
-                      <Status kind="critical">Sin datos</Status>
-                    )}
-                  </td>
-                  <td className="num">
-                    {d.hours_since_last_seen === null
-                      ? '—'
-                      : `hace ${duration(d.hours_since_last_seen)}`}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {summary.unmappedIdentities.length > 0 ? (
-        <>
-          <h2>Actividad sin atribuir</h2>
+        {s.blocked.length === 0 ? (
+          <div className="card">
+            <p style={{ margin: 0 }}>No hay ningún PR abierto.</p>
+          </div>
+        ) : (
           <div className="card">
             <table>
               <caption>
-                Identidades de git o GitHub que no corresponden a nadie en{' '}
-                <code>people</code>. Suele ser alguien que no configuró{' '}
-                <code>git config user.email</code>.
+                Los más parados primero. El reloj cuenta desde el último avance real,
+                no desde que se abrió.
               </caption>
               <thead>
                 <tr>
-                  <th scope="col">Identidad</th>
-                  <th scope="col">Eventos</th>
+                  <th scope="col">PR</th>
+                  <th scope="col">Autor</th>
+                  <th scope="col">Estado</th>
+                  <th scope="col">Parado</th>
+                  <th scope="col">Tamaño</th>
                 </tr>
               </thead>
               <tbody>
-                {summary.unmappedIdentities.map((u) => (
-                  <tr key={u.identity}>
+                {s.blocked.map((pr) => (
+                  <tr key={`${pr.repo}#${pr.number}`}>
                     <td>
-                      <code>{u.identity}</code>
+                      <a
+                        href={`https://github.com/${pr.repo}/pull/${pr.number}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {pr.repo}#{pr.number}
+                      </a>
                     </td>
-                    <td className="num">{u.events}</td>
+                    <td>{pr.author ?? '—'}</td>
+                    <td>
+                      <span className="pill">{REASON_LABEL[pr.reason]}</span>
+                    </td>
+                    <td className="num">{duration(pr.stalled_hours)}</td>
+                    <td className="num">
+                      {pr.size_lines === null ? '—' : `${int(pr.size_lines)} líneas`}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </>
-      ) : null}
+        )}
+      </Section>
+
+      <Section title="CI en la rama principal">
+        <div className="card">
+          {s.main_ci.length === 0 ? (
+            <p className="empty">Sin ejecuciones de CI registradas todavía.</p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Repositorio</th>
+                  <th scope="col">Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {s.main_ci.map((ci) => (
+                  <tr key={ci.repo}>
+                    <td>
+                      <code>{ci.repo}</code>
+                    </td>
+                    <td>
+                      {ci.conclusion === 'success' ? (
+                        <Status kind="good">Verde</Status>
+                      ) : ci.conclusion === 'failure' ? (
+                        <Status kind="critical">En rojo</Status>
+                      ) : (
+                        <Status kind="neutral">{ci.conclusion ?? 'sin datos'}</Status>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </Section>
+
+      <Section title="Hoy, en el equipo">
+        <div className="kpis">
+          <Kpi
+            label="Horas de herramienta"
+            value={fmt(hoursToday, 1)}
+            unit="h"
+            note={hoursCmp.text}
+          />
+          <Kpi
+            label="Push"
+            value={int(s.team_today.pushes)}
+            note={pushCmp.text}
+          />
+          <Kpi label="PR mergeados" value={int(s.team_today.merges)} />
+          <Kpi
+            label="PR abiertos ahora"
+            value={int(s.open_prs)}
+            note="WIP actual"
+          />
+        </div>
+      </Section>
+
+      <Section
+        title="Hoy, por persona"
+        hint="Orden alfabético. Actividad del día en curso, no de este instante."
+      >
+        <div className="card">
+          <table>
+            <caption>
+              Un cero puede ser un día de reuniones, de diseño o de depuración en el
+              navegador: nada de eso lo ve la telemetría. Compruébalo en Salud antes
+              de leerlo como inactividad.
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Persona</th>
+                <th scope="col">Claude</th>
+                <th scope="col">Codex (est.)</th>
+                <th scope="col">Push</th>
+                <th scope="col">Commits</th>
+                <th scope="col">Revisiones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {s.today.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="empty">
+                    Nadie registrado todavía. Añade filas a <code>people</code> y
+                    asigna equipos en <code>devices</code>.
+                  </td>
+                </tr>
+              ) : (
+                s.today.map((p) => (
+                  <tr key={p.person_id ?? p.display_name}>
+                    <td>
+                      {p.person_id ? (
+                        <a href={`/persona/${p.person_id}`}>{p.display_name}</a>
+                      ) : (
+                        p.display_name
+                      )}
+                    </td>
+                    <td className={`num ${p.claude_hours ? '' : 'zero'}`}>
+                      {p.claude_hours ? `${fmt(p.claude_hours, 1)} h` : '—'}
+                    </td>
+                    <td className={`num ${p.codex_hours_est ? '' : 'zero'}`}>
+                      {p.codex_hours_est ? `${fmt(p.codex_hours_est, 1)} h` : '—'}
+                    </td>
+                    <td className={`num ${p.pushes ? '' : 'zero'}`}>
+                      {p.pushes || '—'}
+                    </td>
+                    <td className={`num ${p.commits ? '' : 'zero'}`}>
+                      {p.commits || '—'}
+                    </td>
+                    <td className={`num ${p.reviews ? '' : 'zero'}`}>
+                      {p.reviews || '—'}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Section>
+
+      <ReadingNote>
+        Esta vista mide el <strong>trabajo</strong>, no la presencia de nadie. No hay
+        indicador de actividad en tiempo real por persona, y es deliberado: la
+        telemetría solo ve Claude Code y Codex, así que marcaría como inactivo a
+        quien está leyendo, pensando o en una reunión — justo el trabajo más difícil
+        de hacer.
+      </ReadingNote>
 
       <footer>
-        {summary.peopleReporting} personas reportando · {summary.devicesTotal} equipos
-        registrados
-        {summary.devicesQuiet > 0 ? `, ${summary.devicesQuiet} en silencio` : ''} ·
-        ventana de {WINDOW} días
+        Se actualiza al recibir eventos de GitHub y cada hora. Las métricas de
+        herramienta se exportan cada 60 s, así que no pueden ser más frescas que eso.
       </footer>
     </main>
   )

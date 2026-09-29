@@ -1,6 +1,5 @@
-import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { Kpi, duration, fmt } from '../../components'
+import { Kpi, Nav, PageHeader, ReadingNote, duration, fmt, pct, usd } from '../../components'
 import { db } from '@/lib/db'
 import { loadPeople, median } from '@/lib/metrics'
 
@@ -49,11 +48,11 @@ export default async function PersonPage({
 
   return (
     <main>
-      <p style={{ marginBottom: 8 }}>
-        <Link href="/">← Vista de equipo</Link>
-      </p>
-      <h1>{person.display_name}</h1>
-      <p className="lede">Últimos {WINDOW} días.</p>
+      <Nav current="" />
+      <PageHeader
+        title={String(person.display_name)}
+        lede={`Últimos ${WINDOW} días.`}
+      />
 
       <div className="kpis">
         <Kpi
@@ -157,10 +156,11 @@ export default async function PersonPage({
         </table>
       </div>
 
-      <p className="note">
-        Si algún número de aquí no te cuadra, dilo: es más probable que haya un
-        error de medición que un hallazgo.
-      </p>
+      <ReadingNote>
+        Si algún número de aquí no te cuadra, dilo: es más probable que haya un error
+        de medición que un hallazgo. Un cero no significa un día sin trabajar — la
+        telemetría no ve reuniones, lectura, diseño ni depuración en el navegador.
+      </ReadingNote>
     </main>
   )
 }
