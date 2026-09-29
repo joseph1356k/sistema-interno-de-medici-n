@@ -1,0 +1,44 @@
+# Reconciliacion horaria, opcional.
+#
+# El plan Hobby de Vercel solo admite crons diarios, asi que el cron de vercel.json
+# corre una vez al dia. Si se quiere cadencia horaria sin pagar el plan Pro, este
+# workflow llama al endpoint desde GitHub Actions.
+#
+# Para activarlo hacen falta dos secretos del repositorio:
+#   PANEL_URL     -> https://tu-panel.vercel.app
+#   CRON_SECRET   -> el mismo valor que en Vercel
+#
+# Sin ellos el workflow se salta solo, sin fallar.
+#
+# Aviso honesto: el cron de GitHub Actions no es puntual. Puede retrasarse bastante
+# cuando hay carga, asi que no sirve para nada que dependa del minuto exacto. Para
+# este uso (una red de seguridad) da igual.
+
+name: Reconciliar métricas
+
+on:
+  schedule:
+    - cron: '41 * * * *'
+  workflow_dispatch:
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Llamar al endpoint de reconciliación
+        env:
+          PANEL_URL: ${{ secrets.PANEL_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$PANEL_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "Faltan los secretos PANEL_URL o CRON_SECRET: no hay nada que hacer."
+            exit 0
+          fi
+          code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+            -H "authorization: Bearer $CRON_SECRET" \
+            "$PANEL_URL/api/cron/reconcile")
+          echo "HTTP $code"
+          cat /tmp/resp.json
+          # Un fallo del endpoint debe hacer fallar el workflow: si no, el problema
+          # pasa desapercibido y la red de seguridad deja de existir en silencio.
+          [ "$code" = "200" ]
