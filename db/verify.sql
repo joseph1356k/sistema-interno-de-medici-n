@@ -55,9 +55,16 @@ begin
   select without_comments into n from v_rubber_stamp;
   assert n = 1, format('aprobaciones sin comentarios: esperado 1, obtenido %s', n);
 
-  -- Test inestable: sha3 falla y pasa con el mismo commit.
+  -- Test inestable: sha3 falla DOS veces y pasa con el mismo commit.
   select count(*) into n from v_flaky_ci;
   assert n = 1, format('tests inestables detectados: esperado 1, obtenido %s', n);
+  assert (select head_sha from v_flaky_ci) = 'sha3',
+    'el commit marcado como inestable no es el esperado';
+
+  -- Y el umbral importa: sha5 falla UNA vez y luego pasa, que es relanzar tras un
+  -- corte de red. No debe aparecer, o la vista se llena de ruido.
+  assert not exists (select 1 from v_flaky_ci where head_sha = 'sha5'),
+    'un solo fallo seguido de exito no deberia contar como test inestable';
 
   -- Los PR grandes esperan mas a revision que los medianos. Es el hallazgo que
   -- justifica la vista; si se invierte, algo se rompio.
@@ -128,4 +135,28 @@ begin
   assert n = 1, 'la retencion borro el detalle sin conservar el agregado';
 
   raise notice 'Retencion: el detalle se borra y el agregado se conserva';
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- Cierre de acceso publico
+-- ---------------------------------------------------------------------------
+
+do $$
+declare
+  sin_rls integer;
+begin
+  -- En un Postgres local no existen los roles anon/authenticated de Supabase, asi
+  -- que solo se comprueba la parte que si aplica: que ninguna tabla se quede sin
+  -- RLS. El revoke se verifica contra el proyecto real.
+  select count(*) into sin_rls
+  from pg_tables
+  where schemaname = 'public' and not rowsecurity;
+
+  if sin_rls > 0 then
+    raise notice
+      'Aviso: % tablas sin RLS. Normal en local si 0007 no se aplico; en el proyecto real debe ser 0.',
+      sin_rls;
+  else
+    raise notice 'Cierre: todas las tablas tienen RLS activado';
+  end if;
 end $$;

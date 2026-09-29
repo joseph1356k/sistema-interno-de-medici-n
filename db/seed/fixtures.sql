@@ -48,7 +48,12 @@ insert into ci_runs (dedup_key, repo, head_sha, provider, name, branch, status, 
   attempt, started_at, completed_at, duration_seconds) values
   ('c1','e/app','sha1','check_suite','CI','main','completed','success',1,'2026-09-16T10:00:00Z','2026-09-16T10:08:00Z',480),
   ('c2','e/app','sha3','check_suite','CI','feature','completed','failure',1,'2026-09-24T10:00:00Z','2026-09-24T10:05:00Z',300),
-  ('c3','e/app','sha3','check_suite','CI','feature','completed','success',2,'2026-09-24T11:00:00Z','2026-09-24T11:06:00Z',360),
+  ('c3','e/app','sha3','check_suite','CI','feature','completed','failure',2,'2026-09-24T10:30:00Z','2026-09-24T10:35:00Z',300),
+  ('c3b','e/app','sha3','check_suite','CI','feature','completed','success',3,'2026-09-24T11:00:00Z','2026-09-24T11:06:00Z',360),
+  -- Un solo fallo seguido de exito: relanzar tras un corte de red es lo normal y
+  -- NO debe contar como test inestable.
+  ('c6','e/app','sha5','check_suite','CI','feature','completed','failure',1,'2026-09-24T14:00:00Z','2026-09-24T14:03:00Z',180),
+  ('c7','e/app','sha5','check_suite','CI','feature','completed','success',2,'2026-09-24T14:30:00Z','2026-09-24T14:36:00Z',360),
   ('c4','e/app','sha9','check_suite','CI','main','completed','failure',1,'2026-09-25T08:00:00Z','2026-09-25T08:04:00Z',240),
   ('c5','e/app','sha10','check_suite','CI','main','completed','success',1,'2026-09-25T12:00:00Z','2026-09-25T12:05:00Z',300);
 

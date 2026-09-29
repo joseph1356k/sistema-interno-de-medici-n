@@ -262,6 +262,12 @@ group by 1, 2, 3;
 
 -- Tests inestables: el MISMO workflow que falla y pasa sobre el MISMO commit. Si
 -- el codigo no cambio y el resultado si, el problema es el test, no el cambio.
+--
+-- Se exigen DOS fallos, no uno. Un fallo seguido de un exito sobre el mismo commit
+-- es evidencia debil: casi siempre es alguien relanzando CI tras un corte de red o
+-- un runner perdido. Fallar dos veces y pasar con el mismo codigo ya no se explica
+-- por mala suerte. Sin este umbral la vista lista decenas de entradas y deja de
+-- ser una senal.
 create or replace view v_flaky_ci as
 select repo,
        name,
@@ -272,8 +278,8 @@ select repo,
 from ci_runs
 where conclusion in ('success', 'failure')
 group by 1, 2, 3
-having count(*) filter (where conclusion = 'failure') > 0
-   and count(*) filter (where conclusion = 'success') > 0;
+having count(*) filter (where conclusion = 'failure') >= 2
+   and count(*) filter (where conclusion = 'success') >= 1;
 
 -- ---------------------------------------------------------------------------
 -- Retrabajo y calidad

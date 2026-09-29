@@ -15,7 +15,14 @@ export function db(): SupabaseClient {
   const url = process.env.SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!url || !key) {
-    throw new Error('Faltan SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY')
+    // Error reconocible: el panel muestra instrucciones en vez de un fallo crudo.
+    // Es el caso normal en el primer despliegue, porque la clave de servicio es
+    // secreta y la tiene que pegar una persona.
+    const e = new Error(
+      `Falta ${!url ? 'SUPABASE_URL' : 'SUPABASE_SERVICE_ROLE_KEY'}`,
+    )
+    e.name = 'SetupIncomplete'
+    throw e
   }
 
   cached = createClient(url, key, {

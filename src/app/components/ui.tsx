@@ -134,7 +134,52 @@ export function ReadingNote({ children }: { children: React.ReactNode }) {
   return <p className="note">{children}</p>
 }
 
+/**
+ * Guía el último paso del despliegue.
+ *
+ * La clave de servicio de Supabase es secreta por diseño y no se puede leer por
+ * API, así que la pega una persona. Mostrar instrucciones en vez de una traza es
+ * la diferencia entre un panel que parece roto y uno que dice qué falta.
+ */
+export function SetupCard({ missing }: { missing: string }) {
+  return (
+    <div className="card">
+      <h2 style={{ marginTop: 0 }}>Falta un paso para terminar</h2>
+      <p>
+        El panel está desplegado y la base de datos lista, pero falta la variable{' '}
+        <code>{missing}</code>. Es secreta, así que no se puede configurar
+        automáticamente.
+      </p>
+      <ol style={{ color: 'var(--text-secondary)', paddingLeft: 22 }}>
+        <li>
+          Abre el proyecto en Supabase → <strong>Project Settings</strong> →{' '}
+          <strong>API Keys</strong>.
+        </li>
+        <li>
+          Copia la clave <code>service_role</code> (la secreta, no la{' '}
+          <code>anon</code>).
+        </li>
+        <li>
+          En Vercel → <strong>Settings</strong> → <strong>Environment Variables</strong>,
+          añade <code>SUPABASE_SERVICE_ROLE_KEY</code> con ese valor.
+        </li>
+        <li>Vuelve a desplegar (Deployments → … → Redeploy).</li>
+      </ol>
+      <p className="hint" style={{ marginBottom: 0 }}>
+        Esa clave salta las políticas de acceso, así que solo debe vivir en las
+        variables de entorno del servidor. Nunca en el navegador ni en el repositorio.
+      </p>
+    </div>
+  )
+}
+
 export function ErrorCard({ error }: { error: unknown }) {
+  // Un despliegue a medias es lo más probable la primera vez: se guía en vez de
+  // soltar una traza.
+  if (error instanceof Error && error.name === 'SetupIncomplete') {
+    return <SetupCard missing={error.message.replace(/^Falta /, '')} />
+  }
+
   return (
     <div className="card">
       <p>

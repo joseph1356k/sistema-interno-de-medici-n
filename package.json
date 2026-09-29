@@ -12,8 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "npm run typecheck && npm run test",
-    "seed:demo": "npx tsx db/seed/demo.ts",
-    "seed:clear": "npx tsx db/seed/demo.ts clear",
+    "seed:demo": "psql -v ON_ERROR_STOP=1 -f db/seed/demo.sql",
+    "seed:clear": "psql -v ON_ERROR_STOP=1 -f db/seed/clear.sql",
     "db:verify": "./db/verify.sh"
   },
   "dependencies": {
@@ -26,8 +26,7 @@
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
     "typescript": "^5.6.3",
-    "vitest": "^2.1.5",
-    "tsx": "^4.19.2"
+    "vitest": "^2.1.5"
   },
   "engines": {
     "node": ">=20"

@@ -68,9 +68,9 @@ export default async function RevisionPage() {
             note="mediana"
           />
           <Kpi
-            label="Intentos hasta verde"
+            label="Intentos de CI"
             value={fmt(m.iterations.medianRuns, 1)}
-            note="mediana por PR mergeado"
+            note="mediana en el commit final de cada PR"
           />
         </div>
       </Section>
@@ -275,7 +275,10 @@ export default async function RevisionPage() {
       </Section>
 
       {m.iterations.worst.length > 0 ? (
-        <Section title="PR con más intentos de CI">
+        <Section
+          title="PR con más intentos de CI"
+          hint="Ejecuciones sobre el commit final del PR. No cuenta los intentos de commits anteriores, así que es un mínimo."
+        >
           <div className="card">
             <table>
               <caption>
