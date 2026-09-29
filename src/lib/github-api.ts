@@ -84,3 +84,77 @@ export const ACTIVITY_KIND: Record<string, 'push' | 'force_push' | 'pr_merged'> 
   pr_merge: 'pr_merged',
   merge_queue_merge: 'pr_merged',
 }
+
+// ---------------------------------------------------------------------------
+// Sincronizacion de PRs abiertos
+// ---------------------------------------------------------------------------
+
+/**
+ * El listado de PRs devuelve la forma "simple", que NO incluye `mergeable`,
+ * `mergeable_state`, `additions`, `deletions` ni `changed_files`. Esos campos solo
+ * llegan en el GET de un PR concreto, asi que hay que pedir cada uno.
+ *
+ * Para un equipo pequeno son unas pocas peticiones; el limite de 40 esta para que
+ * un repositorio con cientos de PRs abiertos no agote la cuota de la API.
+ */
+export interface OpenPrSummary {
+  number: number
+  updated_at: string
+}
+
+export async function listOpenPullRequests(
+  fullName: string,
+  limit = 40,
+): Promise<OpenPrSummary[]> {
+  const prs = await get<OpenPrSummary[]>(
+    `/repos/${fullName}/pulls?state=open&sort=updated&direction=desc&per_page=100`,
+  )
+  return prs.slice(0, limit)
+}
+
+/** GET de un PR concreto: es el unico que trae la mergeabilidad y el tamano. */
+export async function getPullRequest(
+  fullName: string,
+  number: number,
+): Promise<Record<string, unknown>> {
+  return get<Record<string, unknown>>(`/repos/${fullName}/pulls/${number}`)
+}
+
+export interface CombinedStatus {
+  state: string
+  sha: string
+}
+
+/**
+ * Estado combinado de un commit. `failure` si algun contexto fallo, `pending` si
+ * falta alguno, `success` si todos los ultimos pasaron.
+ */
+export async function getCombinedStatus(
+  fullName: string,
+  ref: string,
+): Promise<CombinedStatus | null> {
+  try {
+    return await get<CombinedStatus>(`/repos/${fullName}/commits/${ref}/status`)
+  } catch {
+    // Un commit sin ningun status no es un error del sistema.
+    return null
+  }
+}
+
+export interface CheckRunsResponse {
+  total_count: number
+  check_runs: { name: string; status: string; conclusion: string | null }[]
+}
+
+export async function getCheckRuns(
+  fullName: string,
+  ref: string,
+): Promise<CheckRunsResponse | null> {
+  try {
+    return await get<CheckRunsResponse>(
+      `/repos/${fullName}/commits/${ref}/check-runs?filter=latest&per_page=100`,
+    )
+  } catch {
+    return null
+  }
+}

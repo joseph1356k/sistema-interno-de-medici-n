@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server'
-import { db } from '@/lib/db'
-import { parseWebhook, verifySignature } from '@/lib/github'
+import { verifySignature } from '@/lib/github'
+import { affectsBoard, ingestWebhook } from '@/lib/ingest-github'
+import { refreshSnapshot } from '@/lib/live'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-/** Webhook de la organizacion: push, pull_request, pull_request_review. */
+/**
+ * Webhook de la organizacion. Los tipos de evento que hay que marcar en GitHub
+ * estan en SUBSCRIBED_EVENTS (src/lib/ingest-github.ts).
+ */
 export async function POST(request: Request) {
   const secret = process.env.GITHUB_WEBHOOK_SECRET
   if (!secret) {
@@ -15,15 +19,12 @@ export async function POST(request: Request) {
   // El cuerpo se lee como texto: la firma se calcula sobre los bytes tal como
   // llegaron, y un parse+stringify la invalidaria.
   const rawBody = await request.text()
-  const signature = request.headers.get('x-hub-signature-256')
 
-  if (!verifySignature(rawBody, signature, secret)) {
+  if (!verifySignature(rawBody, request.headers.get('x-hub-signature-256'), secret)) {
     return NextResponse.json({ error: 'firma invalida' }, { status: 401 })
   }
 
   const eventType = request.headers.get('x-github-event') ?? ''
-  const deliveryId = request.headers.get('x-github-delivery')
-
   if (eventType === 'ping') return NextResponse.json({ ok: true })
 
   let payload: Record<string, unknown>
@@ -33,18 +34,29 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'json invalido' }, { status: 400 })
   }
 
-  const rows = parseWebhook(eventType, payload, deliveryId)
-  if (rows.length === 0) return NextResponse.json({ stored: 0 })
+  try {
+    const stored = await ingestWebhook(
+      eventType,
+      payload,
+      request.headers.get('x-github-delivery'),
+    )
 
-  // GitHub permite reenvio manual durante 3 dias, asi que el mismo evento puede
-  // llegar dos veces. La unicidad de dedup_key lo absorbe sin error.
-  const { error } = await db()
-    .from('git_events')
-    .upsert(rows, { onConflict: 'dedup_key', ignoreDuplicates: true })
+    // El tablero se recalcula aqui, no al visitarlo: la vista se refresca cada
+    // minuto y por cada pestana abierta. Se espera el resultado a proposito, porque
+    // en serverless una promesa sin await puede morir con la funcion.
+    if (affectsBoard(eventType)) {
+      try {
+        await refreshSnapshot()
+      } catch (e) {
+        // Un fallo al refrescar no debe perder el evento, que ya esta guardado.
+        console.error('no se pudo refrescar el tablero:', e)
+      }
+    }
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ stored })
+  } catch (e) {
+    // 500 a proposito: GitHub no reintenta, pero el job de reconciliacion si
+    // recupera lo perdido, y el error queda en los registros para poder verlo.
+    return NextResponse.json({ error: String(e) }, { status: 500 })
   }
-
-  return NextResponse.json({ stored: rows.length })
 }
