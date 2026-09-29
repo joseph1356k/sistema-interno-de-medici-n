@@ -8,6 +8,11 @@
 
 const API = 'https://api.github.com'
 
+/** True si hay token para llamar a la API. El webhook funciona sin el. */
+export function hasApiToken(): boolean {
+  return Boolean(process.env.GITHUB_API_TOKEN)
+}
+
 function headers(): HeadersInit {
   const token = process.env.GITHUB_API_TOKEN
   if (!token) throw new Error('Falta GITHUB_API_TOKEN')
@@ -33,19 +38,36 @@ export interface OrgRepo {
   pushed_at: string | null
 }
 
-export async function listOrgRepos(org: string): Promise<OrgRepo[]> {
+/**
+ * Repositorios de una organizacion O de una cuenta personal.
+ *
+ * `/orgs/{name}/repos` devuelve 404 para una cuenta personal, que es el caso mas
+ * comun en equipos pequenos. Se prueba primero como organizacion y se cae a
+ * usuario: sin esto la reconciliacion no encontraria ningun repositorio y fallaria
+ * en silencio.
+ */
+export async function listOwnerRepos(owner: string): Promise<OrgRepo[]> {
   const out: OrgRepo[] = []
-  // 100 es el maximo por pagina; se paran en 5 paginas para no agotar la cuota
-  // en organizaciones grandes. Un equipo pequeno no llega ni a la primera.
+  let base = `/orgs/${owner}/repos`
+
+  try {
+    await get<OrgRepo[]>(`${base}?per_page=1`)
+  } catch {
+    base = `/users/${owner}/repos`
+  }
+
+  // 100 es el maximo por pagina; se para en 5 paginas para no agotar la cuota en
+  // cuentas con muchos repositorios. Un equipo pequeno no llega ni a la primera.
   for (let page = 1; page <= 5; page++) {
-    const batch = await get<OrgRepo[]>(
-      `/orgs/${org}/repos?per_page=100&sort=pushed&page=${page}`,
-    )
+    const batch = await get<OrgRepo[]>(`${base}?per_page=100&sort=pushed&page=${page}`)
     out.push(...batch)
     if (batch.length < 100) break
   }
   return out.filter((r) => !r.archived)
 }
+
+/** Nombre anterior, conservado para no romper llamadas existentes. */
+export const listOrgRepos = listOwnerRepos
 
 export interface RepoActivity {
   id: number

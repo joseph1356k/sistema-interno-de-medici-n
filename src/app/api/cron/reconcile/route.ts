@@ -3,8 +3,9 @@ import { db } from '@/lib/db'
 import {
   ACTIVITY_KIND,
   getPullRequest,
+  hasApiToken,
   listOpenPullRequests,
-  listOrgRepos,
+  listOwnerRepos,
   listRepoActivity,
 } from '@/lib/github-api'
 import { applyPrPatch } from '@/lib/ingest-github'
@@ -35,7 +36,27 @@ export async function GET(request: Request) {
   }
 
   const org = process.env.GITHUB_ORG
-  if (!org) return NextResponse.json({ error: 'Falta GITHUB_ORG' }, { status: 500 })
+
+  // Sin token o sin propietario no hay reconciliacion, pero el tablero si se puede
+  // recalcular con lo que ya llego por webhook. Se hace eso y se dice que falta, en
+  // vez de devolver un error que pareceria que el sistema esta roto.
+  if (!org || !hasApiToken()) {
+    let snapshotOk = false
+    try {
+      await refreshSnapshot()
+      snapshotOk = true
+    } catch (e) {
+      return NextResponse.json({ error: String(e) }, { status: 500 })
+    }
+    return NextResponse.json({
+      skipped: 'reconciliación',
+      reason: !org
+        ? 'falta GITHUB_ORG (usuario u organización de GitHub)'
+        : 'falta GITHUB_API_TOKEN',
+      note: 'El webhook sigue funcionando; solo falta la red de seguridad que recupera eventos perdidos.',
+      snapshot: snapshotOk,
+    })
+  }
 
   const errors: string[] = []
   let activityScanned = 0
@@ -44,7 +65,7 @@ export async function GET(request: Request) {
 
   let repos
   try {
-    repos = await listOrgRepos(org)
+    repos = await listOwnerRepos(org)
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 502 })
   }
