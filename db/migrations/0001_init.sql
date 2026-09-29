@@ -72,8 +72,10 @@ create table tool_metrics (
 
 create index tool_metrics_lookup_idx
   on tool_metrics (hostname, metric, observed_at desc);
-create index tool_metrics_day_idx
-  on tool_metrics (date_trunc('day', observed_at), tool);
+-- Consultas por rango de dias. No se usa date_trunc en el indice: es STABLE, no
+-- IMMUTABLE (depende de TimeZone), y Postgres lo rechaza. Un btree por dimension
+-- y tiempo sirve igual para los rangos.
+create index tool_metrics_day_idx on tool_metrics (tool, observed_at desc);
 
 -- Eventos discretos (logs OTel), sin contenido: solo el hecho de que ocurrieron.
 create table tool_events (
@@ -92,8 +94,7 @@ create table tool_events (
 
 create index tool_events_session_idx
   on tool_events (tool, session_id, occurred_at);
-create index tool_events_day_idx
-  on tool_events (date_trunc('day', occurred_at), tool);
+create index tool_events_day_idx on tool_events (tool, occurred_at desc);
 
 -- ---------------------------------------------------------------------------
 -- Actividad de git
@@ -137,6 +138,6 @@ create table git_events (
   ingested_at    timestamptz    not null default now()
 );
 
-create index git_events_day_idx on git_events (date_trunc('day', occurred_at), kind);
+create index git_events_day_idx on git_events (kind, occurred_at desc);
 create index git_events_author_idx on git_events (author_email, occurred_at desc);
 create index git_events_pr_idx on git_events (repo, pr_number);
