@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Configura el agente. Lo ejecuta el instalador; no hace falta llamarlo a mano.
 

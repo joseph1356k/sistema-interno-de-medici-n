@@ -147,9 +147,11 @@ os dice antes.
 
 - **Puedes ver tus propios datos** en el panel, cuando quieras.
 - **Puedes pedir que se borren.** La retención normal es de 90 días de detalle y
-  después solo agregados mensuales.
-- **Puedes desactivarlo** en tu PC con `agent/windows/uninstall.ps1`. Si llegas a
-  ese punto, preferimos que nos digas por qué.
+  después solo agregados por día.
+- **Puedes desactivarlo** en tu PC desinstalando el agente: Configuración →
+  Aplicaciones → «Medición interna - Agente» → Desinstalar (hace falta permiso de
+  administrador del equipo). Quita todo lo que instaló. Si llegas a ese punto,
+  preferimos que nos digas por qué.
 
 ## A quién preguntar
 

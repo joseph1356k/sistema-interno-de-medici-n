@@ -1,4 +1,4 @@
-QUÉ MIDE ESTE AGENTE
+﻿QUÉ MIDE ESTE AGENTE
 
 Este programa mide el uso de Claude Code y Codex en este equipo, para saber si esas
 herramientas están ayudando y cuánto cuestan.

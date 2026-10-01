@@ -49,6 +49,23 @@ jobs:
           if ($faltan) { throw "Faltan archivos que el instalador referencia: $($faltan -join ', ')" }
           Write-Host 'Todas las plantillas están presentes.'
 
+      - name: Comprobar la codificacion de los textos del instalador
+        shell: pwsh
+        run: |
+          # Windows PowerShell 5.1, que es el que ejecuta los scripts en los PCs, e
+          # Inno Setup leen como ANSI un archivo UTF-8 sin BOM: cada tilde saldria
+          # como "Ã³" en los mensajes, en el asistente y en el nombre del servicio.
+          # Este job usa PowerShell 7, que no tiene el problema, asi que sin esta
+          # comprobacion no se notaria hasta instalarlo en un PC.
+          $mal = Get-ChildItem installer -Recurse -Include *.ps1, *.iss, *.txt | Where-Object {
+            $b = [System.IO.File]::ReadAllBytes($_.FullName)
+            $bom = $b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF
+            $noAscii = [bool]($b | Where-Object { $_ -gt 127 } | Select-Object -First 1)
+            $noAscii -and -not $bom
+          }
+          if ($mal) { throw "Con tildes y sin BOM UTF-8: $($mal.Name -join ', ')" }
+          Write-Host 'Codificacion correcta.'
+
       - name: Comprobar la sintaxis de los scripts de PowerShell
         shell: pwsh
         run: |

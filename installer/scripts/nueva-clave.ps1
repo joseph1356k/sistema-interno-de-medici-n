@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Genera la clave de instalación a partir del endpoint y el token.
 

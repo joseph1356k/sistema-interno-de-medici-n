@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Revierte todo lo que hizo el agente. Lo ejecuta el desinstalador.
 

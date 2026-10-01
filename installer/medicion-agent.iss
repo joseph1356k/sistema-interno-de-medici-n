@@ -1,4 +1,4 @@
-; Instalador del agente de medición.
+﻿; Instalador del agente de medición.
 ;
 ; Produce UN solo .exe que ya trae dentro otelcol-contrib, así que no hay binarios
 ; que copiar a mano ni PowerShell que ejecutar.

@@ -186,7 +186,12 @@ las sesiones abiertas.
 
 ## Cómo desactivarlo
 
-`agent/windows/uninstall.ps1` lo revierte todo en un comando. Los datos ya
+Desinstalando el agente como cualquier programa: **Configuración → Aplicaciones →
+«Medición interna - Agente» → Desinstalar** (hace falta permiso de administrador del
+equipo, el mismo que para instalarlo). El desinstalador quita el servicio, la
+telemetría de Claude Code y la sección `[otel]` de Codex, y borra los datos aún no
+enviados; el script que lo hace es
+[`installer/scripts/revert.ps1`](installer/scripts/revert.ps1). Los datos ya
 enviados siguen en el servidor; para que se borren, pídelo a quien administre el
 panel.
 
