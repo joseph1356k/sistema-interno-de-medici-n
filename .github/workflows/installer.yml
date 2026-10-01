@@ -88,6 +88,7 @@ jobs:
       - name: Descargar el collector y verificar el checksum
         shell: pwsh
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.collector.outputs.tag }}
           BARE: ${{ steps.collector.outputs.bare }}
         run: |
@@ -97,7 +98,18 @@ jobs:
           $archivo = "otelcol-contrib_${env:BARE}_windows_amd64.tar.gz"
 
           Invoke-WebRequest "$base/$archivo" -OutFile "build/$archivo"
-          Invoke-WebRequest "$base/otelcol-contrib_${env:BARE}_checksums.txt" -OutFile build/checksums.txt
+
+          # El nombre del archivo de checksums ha cambiado entre versiones del
+          # proyecto, asi que no se adivina: se busca en la lista de la release el de
+          # otelcol-contrib. Sin el, la construccion falla en vez de seguir sin
+          # verificar.
+          $assets = (gh api "repos/open-telemetry/opentelemetry-collector-releases/releases/tags/$env:TAG" | ConvertFrom-Json).assets
+          $sumas = $assets | Where-Object { $_.name -like '*otelcol-contrib*checksums*.txt' } | Select-Object -First 1
+          if (-not $sumas) {
+            throw "La release $env:TAG no publica checksums de otelcol-contrib: $($assets.name -join ', ')"
+          }
+          Write-Host "Checksums: $($sumas.name)"
+          Invoke-WebRequest $sumas.browser_download_url -OutFile build/checksums.txt
 
           # Se verifica el checksum porque este binario acaba en todos los PCs de la
           # empresa: descargarlo sin comprobarlo sería confiar en la red.
