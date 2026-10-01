@@ -99,22 +99,28 @@ jobs:
 
           Invoke-WebRequest "$base/$archivo" -OutFile "build/$archivo"
 
-          # El nombre del archivo de checksums ha cambiado entre versiones del
-          # proyecto, asi que no se adivina: se busca en la lista de la release el de
-          # otelcol-contrib. Sin el, la construccion falla en vez de seguir sin
-          # verificar.
+          # Como se publican los checksums ha cambiado entre versiones del proyecto:
+          # las recientes dan un `.sha256` por archivo, las antiguas un archivo comun.
+          # Se aceptan los dos, buscandolos en la lista de la release. Sin checksum la
+          # construccion falla: este binario acaba en todos los PCs de la empresa, y
+          # descargarlo sin comprobarlo seria confiar en la red.
           $assets = (gh api "repos/open-telemetry/opentelemetry-collector-releases/releases/tags/$env:TAG" | ConvertFrom-Json).assets
-          $sumas = $assets | Where-Object { $_.name -like '*otelcol-contrib*checksums*.txt' } | Select-Object -First 1
-          if (-not $sumas) {
-            throw "La release $env:TAG no publica checksums de otelcol-contrib: $($assets.name -join ', ')"
+          $propio = $assets | Where-Object { $_.name -eq "$archivo.sha256" } | Select-Object -First 1
+          if ($propio) {
+            Write-Host "Checksum: $($propio.name)"
+            Invoke-WebRequest $propio.browser_download_url -OutFile build/checksum.txt
+            $esperado = ((Get-Content build/checksum.txt -Raw).Trim() -split '\s+')[0]
+          } else {
+            $sumas = $assets | Where-Object { $_.name -like '*otelcol-contrib*checksums*.txt' } | Select-Object -First 1
+            if (-not $sumas) {
+              $candidatos = ($assets.name | Where-Object { $_ -like 'otelcol-contrib*windows*' }) -join ', '
+              throw "La release $env:TAG no publica checksum de $archivo. Disponibles: $candidatos"
+            }
+            Write-Host "Checksums: $($sumas.name)"
+            Invoke-WebRequest $sumas.browser_download_url -OutFile build/checksums.txt
+            $esperado = (Select-String -Path build/checksums.txt -Pattern ([regex]::Escape($archivo)) |
+                         Select-Object -First 1).Line.Split(' ')[0]
           }
-          Write-Host "Checksums: $($sumas.name)"
-          Invoke-WebRequest $sumas.browser_download_url -OutFile build/checksums.txt
-
-          # Se verifica el checksum porque este binario acaba en todos los PCs de la
-          # empresa: descargarlo sin comprobarlo sería confiar en la red.
-          $esperado = (Select-String -Path build/checksums.txt -Pattern ([regex]::Escape($archivo)) |
-                       Select-Object -First 1).Line.Split(' ')[0]
           if (-not $esperado) { throw "No se encontró el checksum de $archivo" }
 
           $real = (Get-FileHash "build/$archivo" -Algorithm SHA256).Hash.ToLower()
