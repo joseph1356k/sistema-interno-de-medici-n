@@ -1,21 +1,52 @@
 # Puesta en marcha
 
-Estado actual y qué falta. Los dos primeros pasos son los únicos que no se pueden
-automatizar, porque implican secretos que solo una persona puede leer.
+Estado actual y qué falta. El paso 0 lo puede hacer Claude con los conectores de
+Supabase y Vercel autorizados; los pasos 1 y 2 implican secretos que solo una persona
+puede leer.
 
 ## Lo que ya está hecho
 
 | Pieza | Estado |
 |---|---|
-| Base de datos | Proyecto Supabase `medicion-interna` (eu-west-1), 8 migraciones |
+| Base de datos | Proyecto Supabase `medicion-interna` (eu-west-1). Migraciones 0001–0007 aplicadas; **la 0008 está en el repositorio y se aplica en el paso 0** |
 | Acceso público | **Cerrado**: RLS en todas las tablas; las claves públicas no pueden leer ninguna tabla ni vista ni ejecutar ninguna función. Verificado asumiendo el rol `anon`, y `db/verify.sh` lo comprueba en cada cambio |
-| Zona horaria | Los días se cortan en `America/Bogota` (ver «Zona horaria», abajo) |
+| Zona horaria | Se fija en el paso 0 (`America/Bogota`; ver «Zona horaria», abajo) |
+| Instalador | Construido y verificado en CI: Actions → **Construir instalador** → artefacto `instalador-agente` (68 MB, dura 30 días) |
 | Datos de demostración | 16 semanas sembradas: 155 PRs, 283 ejecuciones de CI, 367 días agregados |
 | Panel | Desplegado en Vercel, responde HTTP 200 |
 | Protección de Vercel | Desactivada a propósito (bloquearía los webhooks y la telemetría); el panel tiene su propia contraseña |
 | Cron | Uno diario, `/api/cron/daily` |
 
 **URL del panel:** `https://medicion-interna-jose-david-s-projects-22dd4300.vercel.app`
+
+## Paso 0 — Aplicar la migración 0008 y desplegar la versión nueva
+
+El código de esta versión está en la rama `claude/affectionate-davinci-p7v9g3` y pasa
+la CI, pero la base de datos y producción siguen en la versión anterior. **El orden
+importa:** primero la base y después el despliegue, porque el código nuevo escribe
+columnas que crea la 0008.
+
+La forma corta: autoriza los conectores de Supabase y de Vercel (este último con
+acceso al equipo del proyecto) en [claude.ai](https://claude.ai/customize/connectors),
+abre una sesión nueva sobre esta rama y pide «aplica el paso 0 de
+docs/puesta-en-marcha.md».
+
+A mano:
+
+1. Supabase → `medicion-interna` → **SQL Editor** → pega el contenido de
+   [`db/migrations/0008_calidad.sql`](../db/migrations/0008_calidad.sql) → **Run**.
+2. En el mismo editor, la zona horaria del equipo:
+   `select set_team_timezone('America/Bogota');`
+3. Vercel → **Settings** → **Environment Variables**: cambia `DASHBOARD_PASSWORD` por
+   una contraseña larga y aleatoria, y añade `SESSION_SECRET` (aleatorio, 64
+   caracteres). Las dos en los tres entornos.
+4. Despliega la rama a producción. Vercel → **Deployments** → la última de la rama
+   `claude/affectionate-davinci-p7v9g3` → **⋯** → **Promote to Production**. Si no
+   aparece ninguna de esa rama, en **Settings** → **Git** pon esa rama como
+   *Production Branch* y vuelve a desplegar.
+
+Para comprobarlo: `/login` debe pedir la contraseña nueva, y la vista **Salud** debe
+mostrar la sección «Datos de demostración».
 
 ## Paso 1 — Pegar la clave de servicio de Supabase (2 minutos)
 
