@@ -7,6 +7,7 @@
  */
 
 import { db } from './db'
+import { isBotLogin } from './github'
 import { blockReason, type BlockReason } from './pr-state'
 
 export interface BlockedPr {
@@ -116,7 +117,6 @@ function hoursSince(iso: string | null | undefined, now: number): number {
 export async function computeSnapshot(now = new Date()): Promise<LiveSnapshot> {
   const client = db()
   const nowMs = now.getTime()
-  const today = now.toISOString().slice(0, 10)
 
   const [openPrs, ciLatest, rollupToday, trailing, devices, demo] = await Promise.all([
     client
@@ -219,6 +219,10 @@ export async function computeSnapshot(now = new Date()): Promise<LiveSnapshot> {
 
   for (const pr of blocked) {
     if (pr.reason === 'draft') continue
+    // Los PR de bots (dependabot, renovate...) se quedan en el tablero, pero no
+    // avisan: nadie del equipo los esta esperando, y una alerta que salta por
+    // ellos cada dia acaba haciendo que se ignoren todas.
+    if (isBotLogin(pr.author)) continue
     if (
       pr.reason === 'awaiting_review' &&
       pr.stalled_hours >= THRESHOLDS.stalledPrHours
@@ -290,14 +294,32 @@ export async function computeSnapshot(now = new Date()): Promise<LiveSnapshot> {
   }
 }
 
-/** Recalcula y guarda el tablero. Se llama tras los webhooks y desde el cron. */
-export async function refreshSnapshot(): Promise<LiveSnapshot> {
-  // El dia en curso se recalcula antes de leerlo, para que `v_today_activity`
-  // este fresca. Es un solo dia de datos, asi que es barato, y evita duplicar la
-  // logica de agregacion entre "hoy" y "el historico".
-  await db().rpc('rollup_day', { target: new Date().toISOString().slice(0, 10) })
+/**
+ * Intervalo minimo entre dos recalculos disparados por webhooks. Un push con CI
+ * manda en pocos segundos una rafaga de eventos (`status` por cada contexto,
+ * `check_suite`, `workflow_run`): recalcular con cada uno es trabajo tirado.
+ */
+export const MIN_REFRESH_INTERVAL_MS = 10_000
 
-  const snapshot = await computeSnapshot()
+/**
+ * Recalcula y guarda el tablero. Se llama desde el cron, y desde los webhooks a
+ * traves de `requestRefresh`.
+ *
+ * `computed_at` es el momento en que EMPIEZA el calculo, no en el que acaba: los
+ * datos se leen a partir de ese instante, asi que cualquier evento marcado como
+ * pendiente despues puede no estar incluido. Eso es lo que permite a
+ * `readSnapshot` saber si la foto esta al dia.
+ */
+export async function refreshSnapshot(): Promise<LiveSnapshot> {
+  const startedAt = new Date()
+
+  // El dia en curso se recalcula antes de leerlo, para que `v_today_activity`
+  // este fresca. "Hoy" lo decide la base, en la zona horaria del equipo: con el
+  // dia UTC, la vista se vaciaba cada tarde en un equipo en America.
+  const { error } = await db().rpc('rollup_today')
+  if (error) console.error('rollup_today:', error.message)
+
+  const snapshot = await computeSnapshot(startedAt)
   await db()
     .from('live_snapshot')
     .upsert(
@@ -307,14 +329,54 @@ export async function refreshSnapshot(): Promise<LiveSnapshot> {
   return snapshot
 }
 
+/**
+ * Lo que llama el webhook: recalcula, salvo que el ultimo calculo sea de hace
+ * menos de `MIN_REFRESH_INTERVAL_MS`. En ese caso solo marca el tablero como
+ * pendiente, que es una escritura de una fila.
+ *
+ * Marcar en vez de descartar es la diferencia importante: si se descartara, el
+ * ULTIMO evento de una rafaga (el del merge, por ejemplo) se perderia hasta el
+ * siguiente evento o el cron, y el tablero mostraria como abierto un PR ya
+ * mergeado. Con la marca, la siguiente visita a "Ahora" recalcula.
+ */
+export async function requestRefresh(now = Date.now()): Promise<'refreshed' | 'deferred'> {
+  const { data } = await db()
+    .from('live_snapshot')
+    .select('computed_at')
+    .eq('id', 1)
+    .maybeSingle()
+
+  const last = data?.computed_at ? Date.parse(String(data.computed_at)) : 0
+  if (Number.isFinite(last) && now - last < MIN_REFRESH_INTERVAL_MS) {
+    await db()
+      .from('live_snapshot')
+      .update({ dirty_since: new Date(now).toISOString() })
+      .eq('id', 1)
+    return 'deferred'
+  }
+
+  await refreshSnapshot()
+  return 'refreshed'
+}
+
+/**
+ * La foto guardada del tablero, o null si no existe o esta desactualizada (llego
+ * un evento despues de calcularla y el webhook aplazo el recalculo). Con null, la
+ * vista recalcula antes de pintar.
+ */
 export async function readSnapshot(): Promise<LiveSnapshot | null> {
   const { data } = await db()
     .from('live_snapshot')
-    .select('payload, computed_at')
+    .select('payload, computed_at, dirty_since')
     .eq('id', 1)
     .maybeSingle()
 
   const payload = data?.payload as LiveSnapshot | undefined
   if (!payload || Object.keys(payload).length === 0) return null
+
+  const dirty = data?.dirty_since ? Date.parse(String(data.dirty_since)) : null
+  const computed = data?.computed_at ? Date.parse(String(data.computed_at)) : null
+  if (dirty !== null && computed !== null && dirty > computed) return null
+
   return payload
 }

@@ -61,6 +61,8 @@ export interface DeliveryMetrics {
     merged: number
     abandoned: number
     abandonRate: number | null
+    /** Mergeados sin ninguna revision de otra persona. */
+    mergedWithoutReview: number
   }[]
   churn: { week: string; touched: number; reworked: number; rate: number | null }[]
   churnEnabled: boolean
@@ -103,8 +105,16 @@ export async function loadDelivery(windowDays = 90): Promise<DeliveryMetrics> {
         ? 'mixed'
         : ((bases.values().next().value as 'to_deploy' | 'to_merge') ?? null)
 
-  const totalDeploysForRate = failRows.reduce((s, r) => s + num(r.deploys), 0)
-  const totalFailures = failRows.reduce((s, r) => s + num(r.failures), 0)
+  // La tasa de fallo solo se puede calcular donde hay despliegues de produccion
+  // registrados. Un PR de reversion en un repo que no reporta despliegues no tiene
+  // denominador: sumarlo inflaba la tasa, que podia pasar del 100 %. Y cada fila
+  // se acota a sus despliegues por la misma razon.
+  const rateRows = failRows.filter((r) => num(r.deploys) > 0)
+  const totalDeploysForRate = rateRows.reduce((s, r) => s + num(r.deploys), 0)
+  const totalFailures = rateRows.reduce(
+    (s, r) => s + Math.min(num(r.failures), num(r.deploys)),
+    0,
+  )
 
   // Tendencia semanal del ciclo total, con mediana por semana.
   const byWeek = new Map<string, number[]>()
@@ -167,6 +177,7 @@ export async function loadDelivery(windowDays = 90): Promise<DeliveryMetrics> {
       merged: num(r.merged),
       abandoned: num(r.abandoned),
       abandonRate: nullableNum(r.abandon_rate),
+      mergedWithoutReview: num(r.merged_without_review),
     })),
     churn: ((churn.data ?? []) as Record<string, unknown>[]).map((r) => ({
       week: String(r.week),

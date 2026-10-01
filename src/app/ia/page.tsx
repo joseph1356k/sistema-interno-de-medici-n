@@ -62,9 +62,13 @@ export default async function IaPage() {
             unit="h"
             note="estimadas, no medidas"
           />
-          <Kpi label="Coste" value={usd(t.costUsd, 0)} note="aproximado" />
           <Kpi
-            label="Coste por PR mergeado"
+            label="Coste equivalente"
+            value={usd(t.costUsd, 0)}
+            note="a precio de API, no es factura"
+          />
+          <Kpi
+            label="Coste equiv. por PR mergeado"
             value={usd(ai.medianCostPerPr, 2)}
             note="mediana diaria"
           />
@@ -81,19 +85,21 @@ export default async function IaPage() {
         El <strong>coste por PR mergeado</strong> es la cifra que responde la pregunta
         original. Las horas por sí solas no: alguien puede pasar mucho tiempo con la
         herramienta abierta y entregar poco, o al revés. La aceptación de ediciones
-        mide la <em>calidad</em> del uso, no la cantidad.
+        mide la <em>calidad</em> del uso, no la cantidad. Con suscripción no se paga
+        por uso: el coste es lo que habría costado a precio de API, y sirve para
+        comparar semanas, no para cuadrar la factura.
       </ReadingNote>
 
-      <Section title="Coste por semana">
+      <Section title="Coste equivalente por semana">
         <div className="card">
           <LineChart
             points={ai.weeklyCost.map((w) => ({ label: w.week, value: w.value }))}
-            label="Coste semanal de herramientas de IA en dólares"
+            label="Coste equivalente semanal de herramientas de IA, en dólares a precio de API"
             unit=" $"
           />
           <ChartTable
-            caption="Coste por semana."
-            columns={['Semana', 'Coste']}
+            caption="Coste equivalente a precio de API, por semana."
+            columns={['Semana', 'Coste equiv.']}
             rows={ai.weeklyCost.map((w) => [w.week, usd(w.value, 2)])}
           />
         </div>
@@ -156,7 +162,7 @@ export default async function IaPage() {
                 <th scope="col">Persona</th>
                 <th scope="col">Claude</th>
                 <th scope="col">Codex (est.)</th>
-                <th scope="col">Coste</th>
+                <th scope="col">Coste equiv.</th>
                 <th scope="col">Aceptación</th>
                 <th scope="col">PR mergeados</th>
                 <th scope="col">Revisiones</th>
@@ -198,7 +204,8 @@ export default async function IaPage() {
       </Section>
 
       <footer>
-        Las cifras de coste son aproximaciones que reporta la propia herramienta. El
+        Las cifras de coste son las que reporta la propia herramienta, calculadas a
+        precio de API: con una suscripción, la factura real no cambia con el uso. El
         tiempo de Codex es una estimación derivada de los huecos entre eventos, porque
         Codex no expone una métrica de tiempo activo: no es comparable de tú a tú con
         el de Claude Code.

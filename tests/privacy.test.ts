@@ -26,6 +26,8 @@ const attr = (key: string, value: string | number | boolean) => ({
 })
 
 const NOW_NANOS = String(Date.parse('2026-09-26T10:00:00Z') * 1e6)
+// "Ahora" fijo: el parser rechaza datos fuera de una ventana de tiempo.
+const NOW = Date.parse('2026-09-26T12:00:00Z')
 
 /** Un atributo con el canario por cada clave que nunca debe guardarse. */
 const poisonedAttrs = NEVER_STORED.map((key) => attr(key, `${SECRET}:${key}`))
@@ -110,7 +112,7 @@ function logsPayload() {
 
 describe('barrera de privacidad', () => {
   it('no deja pasar ninguna clave de la lista NEVER_STORED', () => {
-    const result = parseOtlp({ ...metricsPayload(), ...logsPayload() })
+    const result = parseOtlp({ ...metricsPayload(), ...logsPayload() }, NOW)
     const rows = [...result.metrics, ...result.events]
     expect(rows.length).toBeGreaterThan(0)
 
@@ -125,12 +127,12 @@ describe('barrera de privacidad', () => {
   })
 
   it('el canario no aparece en ninguna parte del resultado serializado', () => {
-    const result = parseOtlp({ ...metricsPayload(), ...logsPayload() })
+    const result = parseOtlp({ ...metricsPayload(), ...logsPayload() }, NOW)
     expect(JSON.stringify(result)).not.toContain(SECRET)
   })
 
   it('descarta los argumentos y la salida de codex.tool_result', () => {
-    const { events } = parseOtlp(logsPayload())
+    const { events } = parseOtlp(logsPayload(), NOW)
     const toolResult = events.find((e) => e.event_name === 'codex.tool_result')
 
     expect(toolResult).toBeDefined()
@@ -141,7 +143,7 @@ describe('barrera de privacidad', () => {
   })
 
   it('guarda la longitud del prompt pero no el prompt', () => {
-    const { events } = parseOtlp(logsPayload())
+    const { events } = parseOtlp(logsPayload(), NOW)
     const prompt = events.find((e) => e.event_name === 'claude_code.user_prompt')
 
     expect(prompt!.attrs).toMatchObject({ prompt_length: 240 })
@@ -149,7 +151,7 @@ describe('barrera de privacidad', () => {
   })
 
   it('conserva lo que si es util para medir', () => {
-    const { metrics } = parseOtlp(metricsPayload())
+    const { metrics } = parseOtlp(metricsPayload(), NOW)
     expect(metrics).toHaveLength(1)
     expect(metrics[0]).toMatchObject({
       hostname: 'pc-07',
@@ -162,7 +164,7 @@ describe('barrera de privacidad', () => {
   })
 
   it('no guarda la identidad de la cuenta compartida', () => {
-    const { metrics } = parseOtlp(metricsPayload())
+    const { metrics } = parseOtlp(metricsPayload(), NOW)
     const serialized = JSON.stringify(metrics)
     expect(serialized).not.toContain('user.email')
     expect(serialized).not.toContain('organization.id')

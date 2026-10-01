@@ -60,7 +60,8 @@ export default async function AhoraPage() {
   let error: unknown = null
 
   try {
-    // Si nunca se calculó (primer arranque), se calcula ahora.
+    // Si nunca se calculó, o llegó un evento después del último cálculo, se
+    // calcula ahora.
     snapshot = (await readSnapshot()) ?? (await refreshSnapshot())
   } catch (e) {
     error = e

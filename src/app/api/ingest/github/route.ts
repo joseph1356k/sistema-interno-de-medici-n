@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { verifySignature } from '@/lib/github'
 import { affectsBoard, ingestWebhook } from '@/lib/ingest-github'
-import { refreshSnapshot } from '@/lib/live'
+import { requestRefresh } from '@/lib/live'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -42,11 +42,12 @@ export async function POST(request: Request) {
     )
 
     // El tablero se recalcula aqui, no al visitarlo: la vista se refresca cada
-    // minuto y por cada pestana abierta. Se espera el resultado a proposito, porque
+    // minuto y por cada pestana abierta. Si ya se recalculo hace nada (rafagas de
+    // CI), solo se marca como pendiente. Se espera el resultado a proposito, porque
     // en serverless una promesa sin await puede morir con la funcion.
     if (affectsBoard(eventType)) {
       try {
-        await refreshSnapshot()
+        await requestRefresh()
       } catch (e) {
         // Un fallo al refrescar no debe perder el evento, que ya esta guardado.
         console.error('no se pudo refrescar el tablero:', e)

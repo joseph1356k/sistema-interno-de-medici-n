@@ -99,12 +99,17 @@ export async function listRepoActivity(
   )
 }
 
-/** Tipos de actividad que nos interesan, mapeados a nuestros `kind`. */
-export const ACTIVITY_KIND: Record<string, 'push' | 'force_push' | 'pr_merged'> = {
+/**
+ * Tipos de actividad que se recuperan, mapeados a nuestros `kind`.
+ *
+ * Solo push. Los merges NO se recuperan de aqui: su fuente autoritativa es la
+ * tabla `pull_requests`, que la reconciliacion ya sincroniza pidiendo cada PR a la
+ * API. Insertarlos tambien aqui los contaria dos veces, y este endpoint ni
+ * siquiera da el numero de PR para poder cruzarlos.
+ */
+export const ACTIVITY_KIND: Record<string, 'push' | 'force_push'> = {
   push: 'push',
   force_push: 'force_push',
-  pr_merge: 'pr_merged',
-  merge_queue_merge: 'pr_merged',
 }
 
 // ---------------------------------------------------------------------------

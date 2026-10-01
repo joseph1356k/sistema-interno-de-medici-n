@@ -5,7 +5,13 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { blockReason, mergePrState, type PrPatch, type PrSnapshot } from '@/lib/pr-state'
+import {
+  blockReason,
+  ghostCandidates,
+  mergePrState,
+  type PrPatch,
+  type PrSnapshot,
+} from '@/lib/pr-state'
 
 const T = (iso: string) => `2026-09-${iso}:00Z`
 
@@ -254,5 +260,26 @@ describe('blockReason', () => {
 
   it('un comentario suelto no cuenta como aprobacion ni como cambios', () => {
     expect(blockReason({ ...base, last_review_state: 'commented' })).toBe('awaiting_review')
+  })
+})
+
+describe('ghostCandidates: PR que la base cree abiertos y GitHub ya no', () => {
+  it('devuelve los que faltan en el listado de GitHub', () => {
+    expect(ghostCandidates([1, 2, 3, 4], [2, 4], true)).toEqual([1, 3])
+  })
+
+  it('no afirma nada si el listado de GitHub vino cortado', () => {
+    // Con la paginacion cortada, un PR ausente puede seguir abierto: pedirlo seria
+    // gastar cuota, y cerrarlo seria un error.
+    expect(ghostCandidates([1, 2, 3], [2], false)).toEqual([])
+  })
+
+  it('respeta el tope de peticiones por repositorio', () => {
+    const enBase = Array.from({ length: 50 }, (_, i) => i + 1)
+    expect(ghostCandidates(enBase, [], true, 20)).toHaveLength(20)
+  })
+
+  it('sin fantasmas no pide nada', () => {
+    expect(ghostCandidates([5, 6], [5, 6, 7], true)).toEqual([])
   })
 })

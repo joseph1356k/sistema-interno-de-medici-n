@@ -164,7 +164,10 @@ export default async function ProyeccionesPage() {
         )}
       </Section>
 
-      <Section title="Coste a fin de mes">
+      <Section
+        title="Coste equivalente a fin de mes"
+        hint="A precio de API. Con suscripción, la factura no depende del uso: sirve para ver la tendencia."
+      >
         {!f.cost ? (
           <div className="card">
             <p style={{ margin: 0 }}>
@@ -176,7 +179,7 @@ export default async function ProyeccionesPage() {
           <>
             <div className="kpis">
               <Kpi
-                label="Gastado este mes"
+                label="Acumulado este mes"
                 value={usd(f.cost.monthToDate, 0)}
                 note={`${f.cost.daysElapsed} de ${f.cost.daysInMonth} días`}
               />

@@ -41,34 +41,61 @@ const empty: IngestResult = {
 }
 
 const PR_COLUMNS =
-  'repo, number, author_login, state, draft, head_sha, base_ref, additions, ' +
+  'repo, number, author_login, state, draft, head_sha, head_ref, base_ref, additions, ' +
   'deletions, changed_files, commits, mergeable, mergeable_state, ' +
   'requested_reviewers, last_review_state, created_at, ready_at, ' +
   'first_review_at, approved_at, merged_at, closed_at, event_ts'
 
 /**
- * Aplica una actualizacion de estado de PR: lee la fila, la fusiona y la vuelve a
- * escribir. Son dos viajes a la base por evento, pero la logica de eventos
- * desordenados es demasiado delicada para expresarla en un solo upsert, y el
- * volumen de webhooks de un equipo pequeno lo hace irrelevante.
+ * Aplica actualizaciones de estado de PR: por cada PR lee la fila, fusiona en
+ * memoria TODOS sus parches, en orden, y la escribe una sola vez.
+ *
+ * La logica de eventos desordenados es demasiado delicada para un solo upsert, asi
+ * que se lee y se escribe. Agrupar importa porque un mismo evento puede traer
+ * varios parches del mismo PR (una revision trae la revision y el PR): sin
+ * agrupar, eran dos lecturas y dos escrituras por evento.
+ *
+ * Devuelve cuantos PR escribio.
  */
-export async function applyPrPatch(patch: PrPatch): Promise<void> {
+export async function applyPrPatches(patches: PrPatch[]): Promise<number> {
+  if (patches.length === 0) return 0
   const client = db()
 
-  const { data: existing } = await client
-    .from('pull_requests')
-    .select(PR_COLUMNS)
-    .eq('repo', patch.repo)
-    .eq('number', patch.number)
-    .maybeSingle()
+  const byPr = new Map<string, PrPatch[]>()
+  for (const patch of patches) {
+    const key = `${patch.repo}#${patch.number}`
+    byPr.set(key, [...(byPr.get(key) ?? []), patch])
+  }
 
-  const merged = mergePrState((existing as PrSnapshot | null) ?? null, patch)
+  for (const group of byPr.values()) {
+    const first = group[0]!
+    const { data: existing, error: readError } = await client
+      .from('pull_requests')
+      .select(PR_COLUMNS)
+      .eq('repo', first.repo)
+      .eq('number', first.number)
+      .maybeSingle()
+    // Sin la fila actual no se puede fusionar: escribir a ciegas podria pisar un
+    // estado mas nuevo con uno viejo.
+    if (readError) throw new Error(`pull_requests: ${readError.message}`)
 
-  await client
-    .from('pull_requests')
-    .upsert({ ...merged, updated_at: new Date().toISOString() }, {
-      onConflict: 'repo,number',
-    })
+    let merged = (existing as PrSnapshot | null) ?? null
+    for (const patch of group) merged = mergePrState(merged, patch)
+
+    const { error } = await client
+      .from('pull_requests')
+      .upsert({ ...merged!, updated_at: new Date().toISOString() }, {
+        onConflict: 'repo,number',
+      })
+    if (error) throw new Error(`pull_requests: ${error.message}`)
+  }
+
+  return byPr.size
+}
+
+/** Un solo parche. La usa la reconciliacion, que sincroniza PR a PR. */
+export async function applyPrPatch(patch: PrPatch): Promise<void> {
+  await applyPrPatches([patch])
 }
 
 /** Despacha un webhook ya verificado. Devuelve cuantas filas escribio por tabla. */
@@ -120,7 +147,7 @@ export async function ingestWebhook(
           .upsert([parsed.review], { onConflict: 'dedup_key', ignoreDuplicates: true })
         if (error) throw new Error(`reviews: ${error.message}`)
         result.reviews = 1
-        patches.push(parsed.pr)
+        patches.push(...parsed.pr)
       }
       break
     }
@@ -163,9 +190,11 @@ export async function ingestWebhook(
           ? parseReleaseEvent(payload)
           : parseDeploymentStatusEvent(payload)
       if (row) {
+        // Sin ignoreDuplicates: un despliegue que falla y luego se reintenta con
+        // exito debe quedar con su estado final.
         const { error } = await client
           .from('deployments')
-          .upsert([row], { onConflict: 'dedup_key', ignoreDuplicates: true })
+          .upsert([row], { onConflict: 'dedup_key' })
         if (error) throw new Error(`deployments: ${error.message}`)
         result.deployments = 1
       }
@@ -173,10 +202,7 @@ export async function ingestWebhook(
     }
   }
 
-  for (const patch of patches) {
-    await applyPrPatch(patch)
-    result.pull_requests++
-  }
+  result.pull_requests = await applyPrPatches(patches)
 
   return result
 }

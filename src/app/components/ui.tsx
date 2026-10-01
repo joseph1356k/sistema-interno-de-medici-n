@@ -123,8 +123,8 @@ export function DemoBanner() {
   return (
     <div className="banner" role="status">
       <strong>Datos de demostración.</strong> Estos números son inventados, para que
-      el panel se pueda leer antes de conectar los equipos. Se borran con{' '}
-      <code>npm run seed:clear</code>.
+      el panel se pueda leer antes de conectar los equipos. Se borran desde{' '}
+      <a href="/salud#demo">Salud</a>.
     </div>
   )
 }

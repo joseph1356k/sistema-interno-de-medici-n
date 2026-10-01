@@ -8,6 +8,7 @@
  * Todo lo que sale de aqui ya paso por la allowlist de src/lib/allowlist.ts.
  */
 
+import { createHash } from 'node:crypto'
 import {
   EVENT_ATTRS,
   METRIC_ATTRS,
@@ -21,6 +22,7 @@ import {
 export type ToolKind = 'claude_code' | 'codex'
 
 export interface MetricRow {
+  dedup_key: string
   hostname: string
   tool: ToolKind
   service_name: string | null
@@ -32,6 +34,7 @@ export interface MetricRow {
 }
 
 export interface EventRow {
+  dedup_key: string
   hostname: string
   tool: ToolKind
   service_name: string | null
@@ -41,11 +44,87 @@ export interface EventRow {
   occurred_at: string
 }
 
+/** Por que se descarto un punto. Se devuelve desglosado para poder diagnosticar. */
+export interface Rejections {
+  /** Sin `host.name` valido: no hay a quien atribuirlo. */
+  no_host: number
+  /** Marca de tiempo fuera de rango: casi siempre un PC con el reloj mal. */
+  bad_time: number
+  /** Valor imposible: negativo, o una duracion mayor que un dia en un solo punto. */
+  bad_value: number
+}
+
 export interface ParseResult {
   metrics: MetricRow[]
   events: EventRow[]
-  /** Filas descartadas por no poder atribuirse a un equipo. */
+  /** Total descartado. El desglose esta en `rejected`. */
   dropped: number
+  rejected: Rejections
+}
+
+/**
+ * Ventana de tiempo aceptada.
+ *
+ * Hacia el futuro, un dia de margen: cubre cualquier desfase de reloj normal, y
+ * un dato con fecha de la semana que viene contaminaria el rollup de un dia que
+ * aun no ha pasado.
+ *
+ * Hacia el pasado, 14 dias: el collector deja de reintentar a las 24 horas, asi
+ * que un dato real nunca llega con mas de un par de dias de retraso. Algo mas
+ * viejo es un reloj mal puesto, y aceptarlo reescribiria dias ya cerrados.
+ */
+export const MAX_FUTURE_MS = 24 * 3_600_000
+export const MAX_AGE_MS = 14 * 24 * 3_600_000
+
+/**
+ * Tope por punto para metricas de duracion. La temporalidad es `delta` y se
+ * exporta cada 60 s, asi que un solo punto con mas de un dia de tiempo activo no
+ * es un dato raro: es un dato roto.
+ */
+export const MAX_SECONDS_PER_POINT = 86_400
+
+const DURATION_METRICS = new Set(['claude_code.active_time.total'])
+
+/** JSON con claves ordenadas, para que el mismo conjunto de atributos de la misma clave. */
+function canonical(attrs: Record<string, unknown>): string {
+  return JSON.stringify(
+    Object.keys(attrs)
+      .sort()
+      .map((k) => [k, attrs[k]]),
+  )
+}
+
+/**
+ * Clave de deduplicacion de un punto.
+ *
+ * El collector reintenta un lote durante hasta 24 horas si no recibe respuesta, y
+ * un reintento puede llegar aunque el servidor YA hubiera guardado el lote (por
+ * ejemplo, si la respuesta se perdio por un corte de red). Sin esta clave, cada
+ * reintento sumaba otra vez el mismo tiempo activo y el mismo coste.
+ *
+ * Con temporalidad delta, cada punto de cada serie cubre una ventana
+ * [inicio, fin] unica, asi que (equipo, metrica, atributos, ventana) identifica el
+ * punto sin ambiguedad. Se usan los nanosegundos crudos, no la fecha ISO, que
+ * pierde precision.
+ */
+export function pointKey(parts: (string | number | null | undefined)[]): string {
+  return createHash('sha256')
+    .update(parts.map((p) => String(p ?? '')).join('|'))
+    .digest('hex')
+    .slice(0, 40)
+}
+
+type TimeCheck = 'ok' | 'bad'
+
+function checkTime(iso: string, now: number): TimeCheck {
+  const t = Date.parse(iso)
+  if (t > now + MAX_FUTURE_MS) return 'bad'
+  if (t < now - MAX_AGE_MS) return 'bad'
+  return 'ok'
+}
+
+function emptyRejections(): Rejections {
+  return { no_host: 0, bad_time: 0, bad_value: 0 }
 }
 
 /** Un valor de atributo en OTLP JSON (AnyValue). */
@@ -158,13 +237,16 @@ function valueOf(point: Record<string, unknown>): number | null {
   return null
 }
 
-export function parseMetrics(payload: unknown): { rows: MetricRow[]; dropped: number } {
+export function parseMetrics(
+  payload: unknown,
+  now: number = Date.now(),
+): { rows: MetricRow[]; rejected: Rejections } {
   const rows: MetricRow[] = []
-  let dropped = 0
+  const rejected = emptyRejections()
 
   const resourceMetrics =
     (payload as { resourceMetrics?: unknown[] } | undefined)?.resourceMetrics
-  if (!Array.isArray(resourceMetrics)) return { rows, dropped }
+  if (!Array.isArray(resourceMetrics)) return { rows, rejected }
 
   for (const rm of resourceMetrics) {
     const ctx = readResource((rm as { resource?: unknown }).resource)
@@ -192,19 +274,39 @@ export function parseMetrics(payload: unknown): { rows: MetricRow[]; dropped: nu
           // Sin hostname no se puede atribuir: se cuenta y se descarta, en vez
           // de guardarse en un cajon anonimo que nadie revisa.
           if (!ctx.hostname) {
-            dropped++
+            rejected.no_host++
+            continue
+          }
+
+          if (checkTime(observedAt, now) === 'bad') {
+            rejected.bad_time++
+            continue
+          }
+
+          // Contadores delta, costes y tokens no pueden ser negativos.
+          if (value < 0 || (DURATION_METRICS.has(name) && value > MAX_SECONDS_PER_POINT)) {
+            rejected.bad_value++
             continue
           }
 
           const pointAttrs = flattenAttributes(point.attributes as OtlpKeyValue[])
+          const attrs = filterAttrs(pointAttrs, METRIC_ATTRS)
           rows.push({
+            dedup_key: pointKey([
+              'm',
+              ctx.hostname,
+              name,
+              String(point.startTimeUnixNano ?? ''),
+              String(point.timeUnixNano ?? ''),
+              canonical(attrs),
+            ]),
             hostname: ctx.hostname,
             tool,
             service_name: ctx.serviceName,
             metric: name,
             value,
             unit: typeof metric.unit === 'string' ? metric.unit : null,
-            attrs: filterAttrs(pointAttrs, METRIC_ATTRS),
+            attrs,
             observed_at: observedAt,
           })
         }
@@ -212,7 +314,7 @@ export function parseMetrics(payload: unknown): { rows: MetricRow[]; dropped: nu
     }
   }
 
-  return { rows, dropped }
+  return { rows, rejected }
 }
 
 /** Nombre del evento: puede venir como atributo o en el cuerpo del log record. */
@@ -233,12 +335,15 @@ function eventNameOf(
   return null
 }
 
-export function parseLogs(payload: unknown): { rows: EventRow[]; dropped: number } {
+export function parseLogs(
+  payload: unknown,
+  now: number = Date.now(),
+): { rows: EventRow[]; rejected: Rejections } {
   const rows: EventRow[] = []
-  let dropped = 0
+  const rejected = emptyRejections()
 
   const resourceLogs = (payload as { resourceLogs?: unknown[] } | undefined)?.resourceLogs
-  if (!Array.isArray(resourceLogs)) return { rows, dropped }
+  if (!Array.isArray(resourceLogs)) return { rows, rejected }
 
   for (const rl of resourceLogs) {
     const ctx = readResource((rl as { resource?: unknown }).resource)
@@ -263,30 +368,59 @@ export function parseLogs(payload: unknown): { rows: EventRow[]; dropped: number
         if (!occurredAt) continue
 
         if (!ctx.hostname) {
-          dropped++
+          rejected.no_host++
           continue
         }
 
+        if (checkTime(occurredAt, now) === 'bad') {
+          rejected.bad_time++
+          continue
+        }
+
+        const sessionId =
+          safeSessionId(rawAttrs['session.id']) ??
+          safeSessionId(rawAttrs['conversation.id'])
+        const attrs = filterAttrs(rawAttrs, EVENT_ATTRS)
+
         rows.push({
+          // Mismo motivo que en las metricas: los reintentos del collector no
+          // deben duplicar eventos, porque de ellos se deriva el tiempo de Codex.
+          dedup_key: pointKey([
+            'e',
+            ctx.hostname,
+            name,
+            sessionId,
+            String(record.timeUnixNano ?? ''),
+            String(record.observedTimeUnixNano ?? ''),
+            canonical(attrs),
+          ]),
           hostname: ctx.hostname,
           tool,
           service_name: ctx.serviceName,
           event_name: name,
-          session_id:
-            safeSessionId(rawAttrs['session.id']) ??
-            safeSessionId(rawAttrs['conversation.id']),
-          attrs: filterAttrs(rawAttrs, EVENT_ATTRS),
+          session_id: sessionId,
+          attrs,
           occurred_at: occurredAt,
         })
       }
     }
   }
 
-  return { rows, dropped }
+  return { rows, rejected }
 }
 
-export function parseOtlp(payload: unknown): ParseResult {
-  const m = parseMetrics(payload)
-  const l = parseLogs(payload)
-  return { metrics: m.rows, events: l.rows, dropped: m.dropped + l.dropped }
+export function parseOtlp(payload: unknown, now: number = Date.now()): ParseResult {
+  const m = parseMetrics(payload, now)
+  const l = parseLogs(payload, now)
+  const rejected: Rejections = {
+    no_host: m.rejected.no_host + l.rejected.no_host,
+    bad_time: m.rejected.bad_time + l.rejected.bad_time,
+    bad_value: m.rejected.bad_value + l.rejected.bad_value,
+  }
+  return {
+    metrics: m.rows,
+    events: l.rows,
+    dropped: rejected.no_host + rejected.bad_time + rejected.bad_value,
+    rejected,
+  }
 }

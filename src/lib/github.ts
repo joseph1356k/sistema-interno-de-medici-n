@@ -120,6 +120,27 @@ function intOrNull(v: unknown): number | null {
 }
 
 /**
+ * Identidad de un push: repositorio + rama + sha resultante.
+ *
+ * Es la MISMA clave para el webhook y para la reconciliacion, y eso es lo
+ * importante. Antes cada via usaba la suya (el id de entrega en un caso, el id de
+ * actividad en el otro), asi que un mismo push que llegaba por las dos se contaba
+ * dos veces, y la reconciliacion diaria repasa la ultima semana entera: cada push
+ * acababa duplicado.
+ *
+ * La rama entra en la clave porque empujar el mismo commit a dos ramas son dos
+ * push distintos.
+ */
+export function pushKey(repo: string, ref: string | null, afterSha: string): string {
+  return `push:${repo}:${ref ?? ''}:${afterSha}`
+}
+
+/** Un login de bot de GitHub (dependabot[bot], github-actions[bot]...). */
+export function isBotLogin(login: string | null | undefined): boolean {
+  return typeof login === 'string' && login.endsWith('[bot]')
+}
+
+/**
  * Traduce un payload de webhook a cero o mas filas. Devuelve [] para eventos que
  * no interesan, en vez de lanzar: el webhook de organizacion puede recibir tipos
  * que no pedimos.
@@ -161,6 +182,10 @@ export function parseWebhook(
   }
 
   if (eventType === 'push') {
+    // Borrar una rama tambien llega como push, sin commits. No es trabajo, y
+    // contarlo inflaria los push de quien limpia ramas viejas.
+    if (payload.deleted === true) return []
+
     const commits = payload.commits as Commit[] | undefined
     const { email, mixed } = dominantAuthor(commits)
     const forced = payload.forced === true
@@ -175,24 +200,28 @@ export function parseWebhook(
       isoOrNull(head?.timestamp) ??
       receivedAt.toISOString()
 
+    const ref = typeof payload.ref === 'string' ? payload.ref : null
+    const after = typeof payload.after === 'string' ? payload.after : null
+
     return [
       {
         ...base,
-        dedup_key: keyFor(
-          forced ? 'force_push' : 'push',
-          typeof payload.after === 'string' ? payload.after : (payload.ref as string) ?? '',
-        ),
+        // Sin sha no hay identidad estable: se cae a la clave por entrega, que al
+        // menos absorbe los reenvios.
+        dedup_key: after
+          ? pushKey(repo, ref, after)
+          : keyFor(forced ? 'force_push' : 'push', ref ?? ''),
         kind: forced ? 'force_push' : 'push',
         author_email: email,
-        ref: typeof payload.ref === 'string' ? payload.ref : null,
+        ref,
         commit_count: Array.isArray(commits)
           ? commits.filter((c) => c?.distinct !== false).length
           : 0,
         meta: {
           mixed_authors: mixed,
           created: payload.created === true,
-          deleted: payload.deleted === true,
           forced,
+          bot: isBotLogin(sender),
           // `commits[]` se corta en 2048; si llega al tope, el conteo es un piso.
           commits_truncated: Array.isArray(commits) && commits.length >= 2048,
         },

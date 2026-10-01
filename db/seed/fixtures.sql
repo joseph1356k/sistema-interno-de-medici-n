@@ -75,3 +75,59 @@ insert into commit_files (dedup_key, repo, sha, path_hash, change_type, committe
   ('f1','e/app','sha1','h_a','modified','2026-09-16T09:00:00Z'),
   ('f2','e/app','sha1','h_b','added','2026-09-16T09:00:00Z'),
   ('f3','e/app','sha2','h_a','modified','2026-09-18T09:00:00Z');
+
+-- ---------------------------------------------------------------------------
+-- Casos de calidad de datos (repo e/q, PRs 501+), para las aserciones de 0008
+-- ---------------------------------------------------------------------------
+
+-- Persona y equipo aislados para la prueba de zona horaria.
+insert into people (id, display_name, git_emails, github_login) values
+  ('33333333-3333-3333-3333-333333333333','Zoe', array['zoe@e.com'], 'zoe');
+insert into devices (hostname, person_id, os) values
+  ('pc-tz','33333333-3333-3333-3333-333333333333','Windows 11');
+
+-- 02:30 UTC del 22 = 21:30 del 21 en Bogota (UTC-5). Cae en un dia u otro segun
+-- la zona del equipo, que es justo lo que se prueba.
+insert into tool_metrics (hostname, tool, metric, value, unit, attrs, observed_at) values
+  ('pc-tz','claude_code','claude_code.active_time.total',600,'s','{"type":"user"}','2026-09-22T02:30:00Z');
+
+-- Tokens: las lecturas de cache no deben contar.
+insert into tool_metrics (hostname, tool, metric, value, unit, attrs, observed_at) values
+  ('pc-01','claude_code','claude_code.token.usage',1000,'','{"type":"input"}','2026-09-21T15:00:00Z'),
+  ('pc-01','claude_code','claude_code.token.usage',500,'','{"type":"output"}','2026-09-21T15:00:00Z'),
+  ('pc-01','claude_code','claude_code.token.usage',900000,'','{"type":"cacheRead"}','2026-09-21T15:00:00Z');
+
+insert into pull_requests (repo, number, author_login, state, head_sha, head_ref,
+  additions, deletions, changed_files, created_at, ready_at, first_review_at,
+  approved_at, merged_at, event_ts) values
+  -- 501: de un bot. No debe entrar en ninguna metrica de ciclo.
+  ('e/q',501,'dependabot[bot]','merged','q501','dependabot/npm/x', 3,3,1,
+   '2026-09-22T09:00:00Z','2026-09-22T09:00:00Z',null,null,'2026-09-22T09:05:00Z','2026-09-22T09:05:00Z'),
+  -- 502: revisado MIENTRAS era borrador. Antes daba horas negativas.
+  ('e/q',502,'luis','merged','q502','feature', 40,10,2,
+   '2026-09-22T09:00:00Z','2026-09-22T12:00:00Z','2026-09-22T10:00:00Z',
+   '2026-09-22T13:00:00Z','2026-09-22T14:00:00Z','2026-09-22T14:00:00Z'),
+  -- 503: reversion mergeada (rama creada por el boton Revert de GitHub).
+  ('e/q',503,'ana','merged','q503','revert-502-feature', 3,3,1,
+   '2026-09-23T09:00:00Z','2026-09-23T09:00:00Z',null,null,'2026-09-23T10:00:00Z','2026-09-23T10:00:00Z'),
+  -- 504: mergeado sin que nadie lo revisara.
+  ('e/q',504,'ana','merged','q504','hotfix', 2,1,1,
+   '2026-09-23T09:00:00Z','2026-09-23T09:00:00Z',null,null,'2026-09-23T09:30:00Z','2026-09-23T09:30:00Z');
+
+insert into reviews (dedup_key, repo, pr_number, reviewer_login, pr_author_login, state, submitted_at, external_id) values
+  -- Revision real de 502.
+  ('q-r1','e/q',502,'ana','luis','approved','2026-09-22T13:00:00Z','q-rev-1'),
+  -- Autorrevision: Luis comentando su propio PR. No es la revision que se espera.
+  ('q-r2','e/q',502,'luis','luis','commented','2026-09-22T09:30:00Z','q-rev-2'),
+  -- Un bot que revisa a los segundos.
+  ('q-r3','e/q',502,'coderabbit[bot]','luis','commented','2026-09-22T09:01:00Z','q-rev-3');
+
+insert into deployments (dedup_key, repo, environment, ref, sha, source, deployed_at, status, is_rollback) values
+  -- Preview de Vercel: no es un despliegue a produccion.
+  ('q-d0','e/q','Preview – web','feature','q1','deployment_status','2026-09-22T10:00:00Z','success',false),
+  ('q-d1','e/q','Production – web','main','q1','deployment_status','2026-09-22T11:00:00Z','success',false),
+  ('q-d2','e/q','Production – web','main','q2','deployment_status','2026-09-22T15:00:00Z','success',false),
+  -- Volver a desplegar q1 despues de q2: una reversion.
+  ('q-d3','e/q','Production – web','main','q1','deployment_status','2026-09-22T16:00:00Z','success',false),
+  -- Despliegue fallido.
+  ('q-d4','e/q','Production – web','main','q3','deployment_status','2026-09-23T11:00:00Z','failure',false);

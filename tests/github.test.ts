@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { dominantAuthor, parseWebhook, verifySignature } from '@/lib/github'
+import { dominantAuthor, isBotLogin, parseWebhook, pushKey, verifySignature } from '@/lib/github'
 
 describe('verifySignature', () => {
   // Vector de prueba oficial de las docs de GitHub.
@@ -277,10 +277,26 @@ describe('parseWebhook: review y casos borde', () => {
     expect(a.dedup_key).toBe(b.dedup_key)
   })
 
-  it('genera dedup_key distinto para deliveries distintos', () => {
-    const payload = { repository: repo, sender, after: 'abc', commits: [] }
+  it('el MISMO push da la misma clave aunque llegue en entregas distintas', () => {
+    // Un push es un push, llegue por donde llegue. Con claves por entrega, un
+    // reenvio manual desde GitHub o la reconciliacion lo contaban dos veces.
+    const payload = { repository: repo, sender, ref: 'refs/heads/main', after: 'abc', commits: [] }
     const a = parseWebhook('push', payload, 'delivery-1')[0]!
     const b = parseWebhook('push', payload, 'delivery-2')[0]!
+    expect(a.dedup_key).toBe(b.dedup_key)
+  })
+
+  it('push distintos dan claves distintas', () => {
+    const base = { repository: repo, sender, ref: 'refs/heads/main', commits: [] }
+    const a = parseWebhook('push', { ...base, after: 'aaa' }, 'd')[0]!
+    const b = parseWebhook('push', { ...base, after: 'bbb' }, 'd')[0]!
+    expect(a.dedup_key).not.toBe(b.dedup_key)
+  })
+
+  it('el mismo commit empujado a dos ramas son dos push', () => {
+    const base = { repository: repo, sender, after: 'aaa', commits: [] }
+    const a = parseWebhook('push', { ...base, ref: 'refs/heads/main' }, 'd')[0]!
+    const b = parseWebhook('push', { ...base, ref: 'refs/heads/release' }, 'd')[0]!
     expect(a.dedup_key).not.toBe(b.dedup_key)
   })
 
@@ -290,5 +306,73 @@ describe('parseWebhook: review y casos borde', () => {
     const b = parseWebhook('push', payload, null)[0]!
     expect(a.dedup_key).toBe(b.dedup_key)
     expect(a.dedup_key).toContain('empresa/app')
+  })
+})
+
+describe('webhook y reconciliacion comparten la identidad del push', () => {
+  it('pushKey coincide con la clave que genera el webhook', () => {
+    // La reconciliacion construye la clave con pushKey a partir de la API de
+    // actividad. Si no coincidiera con la del webhook, el mismo push se guardaria
+    // dos veces cada vez que corre la reconciliacion.
+    const row = parseWebhook(
+      'push',
+      {
+        repository: { full_name: 'empresa/app' },
+        sender: { login: 'ana' },
+        ref: 'refs/heads/main',
+        after: 'deadbeef',
+        commits: [],
+      },
+      'delivery-x',
+    )[0]!
+    expect(row.dedup_key).toBe(pushKey('empresa/app', 'refs/heads/main', 'deadbeef'))
+  })
+})
+
+describe('push que no son trabajo', () => {
+  it('ignora el borrado de una rama', () => {
+    // Llega como push, sin commits. Contarlo inflaria los push de quien limpia
+    // ramas viejas.
+    const rows = parseWebhook(
+      'push',
+      {
+        repository: { full_name: 'empresa/app' },
+        sender: { login: 'ana' },
+        ref: 'refs/heads/vieja',
+        after: '0000000000000000000000000000000000000000',
+        deleted: true,
+        commits: [],
+      },
+      'd',
+    )
+    expect(rows).toHaveLength(0)
+  })
+
+  it('marca los push de bots', () => {
+    const rows = parseWebhook(
+      'push',
+      {
+        repository: { full_name: 'empresa/app' },
+        sender: { login: 'github-actions[bot]' },
+        ref: 'refs/heads/gh-pages',
+        after: 'abc',
+        commits: [],
+      },
+      'd',
+    )
+    expect(rows[0]!.meta).toMatchObject({ bot: true })
+  })
+})
+
+describe('isBotLogin', () => {
+  it('reconoce los logins de bot de GitHub', () => {
+    expect(isBotLogin('dependabot[bot]')).toBe(true)
+    expect(isBotLogin('github-actions[bot]')).toBe(true)
+  })
+
+  it('no confunde a una persona con un bot', () => {
+    expect(isBotLogin('ana')).toBe(false)
+    expect(isBotLogin('robot-ana')).toBe(false)
+    expect(isBotLogin(null)).toBe(false)
   })
 })

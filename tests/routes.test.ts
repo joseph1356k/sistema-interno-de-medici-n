@@ -50,6 +50,12 @@ vi.mock('@/lib/db', () => {
   return { db: () => ({ from: table }), touchDevices: () => Promise.resolve() }
 })
 
+// El refresco del tablero se prueba aparte; aqui solo importa que la ruta lo
+// pida cuando toca. Sin este mock, cada test escribia una traza de error al
+// intentar refrescar contra la base simulada.
+const requestRefresh = vi.fn(() => Promise.resolve('refreshed' as const))
+vi.mock('@/lib/live', () => ({ requestRefresh }))
+
 const { POST: otlpRoute } = await import('@/app/api/ingest/otlp/route')
 const { POST: githubRoute } = await import('@/app/api/ingest/github/route')
 
@@ -57,6 +63,7 @@ const SECRET = 'secreto-de-prueba'
 const CANARIO = 'CANARIO_NO_DEBE_LLEGAR_A_LA_BASE'
 
 beforeEach(() => {
+  requestRefresh.mockClear()
   for (const key of Object.keys(written)) delete written[key]
   for (const key of Object.keys(stored)) delete stored[key]
   process.env.INGEST_TOKEN = 'token-valido'
@@ -101,7 +108,8 @@ const attr = (key: string, value: string | number | boolean) => ({
         : { stringValue: value },
 })
 
-const NANOS = String(Date.parse('2026-09-26T10:00:00Z') * 1e6)
+// La ruta usa el reloj real: los datos van fechados una hora antes de ahora.
+const NANOS = String((Date.now() - 3_600_000) * 1e6)
 
 describe('POST /api/ingest/otlp', () => {
   it('rechaza sin token y con token incorrecto', async () => {
@@ -431,6 +439,41 @@ describe('webhooks de estado: PR, CI, revisiones y despliegues', () => {
     })
   })
 
+  it('la revision de un bot se guarda pero no cuenta como primera revision', async () => {
+    await githubRoute(
+      githubRequest('pull_request_review', {
+        action: 'submitted',
+        repository: repo,
+        sender: { login: 'coderabbitai[bot]' },
+        pull_request: { number: 12, user: { login: 'ana' }, state: 'open' },
+        review: {
+          id: 557,
+          user: { login: 'coderabbitai[bot]' },
+          state: 'COMMENTED',
+          submitted_at: '2026-09-21T10:00:30Z',
+        },
+      }),
+    )
+
+    expect(written.reviews![0]).toMatchObject({ reviewer_login: 'coderabbitai[bot]' })
+    // Una sola escritura por PR aunque el evento traiga dos parches.
+    expect(written.pull_requests).toHaveLength(1)
+    expect(written.pull_requests![0]).toMatchObject({ first_review_at: null })
+  })
+
+  it('guarda los despliegues fallidos con su estado', async () => {
+    await githubRoute(
+      githubRequest('deployment_status', {
+        repository: repo,
+        sender: { login: 'vercel[bot]' },
+        deployment: { id: 31, environment: 'Production', sha: 'abc', ref: 'main' },
+        deployment_status: { state: 'failure', created_at: '2026-09-21T10:00:00Z' },
+      }),
+    )
+
+    expect(written.deployments![0]).toMatchObject({ status: 'failure', sha: 'abc' })
+  })
+
   it('guarda CI indexado por head_sha, no por el PR', async () => {
     await githubRoute(
       githubRequest('check_suite', {
@@ -572,5 +615,94 @@ describe('webhooks de estado: PR, CI, revisiones y despliegues', () => {
     expect(serialized).not.toContain('src/')
     expect(written.commit_files![0]).toMatchObject({ change_type: 'modified' })
     delete process.env.FILE_HASH_SALT
+  })
+})
+
+describe('POST /api/ingest/otlp: idempotencia y limites', () => {
+  const lote = () => ({
+    resourceMetrics: [
+      {
+        resource: {
+          attributes: [attr('host.name', 'pc-01'), attr('service.name', 'claude-code')],
+        },
+        scopeMetrics: [
+          {
+            metrics: [
+              {
+                name: 'claude_code.active_time.total',
+                sum: { dataPoints: [{ timeUnixNano: NANOS, asDouble: 60 }] },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  })
+
+  it('escribe con clave de deduplicacion, para que un reintento no sume dos veces', async () => {
+    await otlpRoute(otlpRequest(lote()))
+    await otlpRoute(otlpRequest(lote()))
+
+    const rows = written.tool_metrics as { dedup_key: string }[]
+    expect(rows).toHaveLength(2) // el mock no deduplica: registra lo que se envio
+    // ...pero las dos filas llevan la misma clave, y en la base real el upsert con
+    // ignoreDuplicates descarta la segunda.
+    expect(rows[0]!.dedup_key).toBe(rows[1]!.dedup_key)
+  })
+
+  it('rechaza un lote mayor del limite por la cabecera', async () => {
+    const req = new Request('http://localhost/api/ingest/otlp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer token-valido',
+        'content-length': String(10 * 1024 * 1024),
+      },
+      body: '{}',
+    })
+    expect((await otlpRoute(req)).status).toBe(413)
+  })
+
+  it('rechaza un lote mayor del limite aunque la cabecera mienta', async () => {
+    const enorme = JSON.stringify({ relleno: 'x'.repeat(6 * 1024 * 1024) })
+    const req = new Request('http://localhost/api/ingest/otlp', {
+      method: 'POST',
+      headers: { authorization: 'Bearer token-valido', 'content-length': '10' },
+      body: enorme,
+    })
+    expect((await otlpRoute(req)).status).toBe(413)
+    expect(written.tool_metrics).toBeUndefined()
+  })
+})
+
+describe('el webhook refresca el tablero solo cuando hace falta', () => {
+  it('lo refresca tras un evento de PR', async () => {
+    await githubRoute(
+      githubRequest('pull_request', {
+        action: 'opened',
+        repository: { full_name: 'empresa/app' },
+        sender: { login: 'ana' },
+        pull_request: {
+          number: 77,
+          state: 'open',
+          user: { login: 'ana' },
+          created_at: '2026-09-20T09:00:00Z',
+          updated_at: '2026-09-20T09:00:00Z',
+        },
+      }),
+    )
+    expect(requestRefresh).toHaveBeenCalledTimes(1)
+  })
+
+  it('no lo refresca tras un push, que no cambia ningun PR abierto', async () => {
+    await githubRoute(
+      githubRequest('push', {
+        repository: { full_name: 'empresa/app', pushed_at: 1790000000 },
+        sender: { login: 'ana' },
+        ref: 'refs/heads/main',
+        after: 'abc',
+        commits: [],
+      }),
+    )
+    expect(requestRefresh).not.toHaveBeenCalled()
   })
 })

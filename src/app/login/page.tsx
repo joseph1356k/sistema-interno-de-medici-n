@@ -25,7 +25,9 @@ export default async function LoginPage({
         </form>
         {error ? (
           <p className="error" role="alert" style={{ marginTop: 12 }}>
-            Contraseña incorrecta.
+            {error === 'bloqueado'
+              ? 'Demasiados intentos fallidos. Espera 15 minutos y vuelve a probar.'
+              : 'Contraseña incorrecta.'}
           </p>
         ) : null}
       </div>

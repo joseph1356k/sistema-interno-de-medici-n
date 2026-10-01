@@ -11,6 +11,7 @@ import {
   shortDate,
 } from '../components'
 import {
+  hasDemoData,
   loadDeviceHealth,
   loadUnmappedActivity,
   type DeviceHealthRow,
@@ -18,12 +19,27 @@ import {
 
 export const dynamic = 'force-dynamic'
 
-export default async function SaludPage() {
+const DEMO_MESSAGE: Record<string, string> = {
+  borrado: 'Datos de demostración borrados. A partir de ahora el panel solo muestra datos reales.',
+  error: 'No se pudieron borrar los datos de demostración. Revisa los registros del servidor.',
+}
+
+export default async function SaludPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ demo?: string }>
+}) {
+  const { demo: demoResult } = await searchParams
   let devices: DeviceHealthRow[]
   let unmapped: { identity: string; events: number; last_seen: string }[]
+  let demo: boolean
 
   try {
-    ;[devices, unmapped] = await Promise.all([loadDeviceHealth(), loadUnmappedActivity()])
+    ;[devices, unmapped, demo] = await Promise.all([
+      loadDeviceHealth(),
+      loadUnmappedActivity(),
+      hasDemoData(),
+    ])
   } catch (e) {
     return (
       <main>
@@ -193,7 +209,8 @@ export default async function SaludPage() {
               requeriría un monitor de ventanas, que se decidió no instalar.
             </li>
             <li>
-              Las cifras de coste son aproximaciones que reporta la propia herramienta.
+              Las cifras de coste son las que reporta la propia herramienta, a precio de
+              API. Con suscripción no son lo que se paga: sirven para comparar.
             </li>
             <li>
               Un cero en cualquier vista puede ser un día de reuniones, de diseño o de
@@ -202,6 +219,34 @@ export default async function SaludPage() {
           </ul>
         </div>
       </Section>
+
+      {demo ? (
+        <Section
+          title="Datos de demostración"
+          hint="Las 16 semanas inventadas que se sembraron para poder ver el panel antes de conectar los equipos."
+        >
+          <div className="card" id="demo">
+            <p style={{ marginTop: 0 }}>
+              Bórralos antes de empezar a medir de verdad: mezclados con los reales,
+              falsean todas las medias y las proyecciones. Solo se borran filas marcadas
+              como demo; los datos reales no se tocan. No se puede deshacer.
+            </p>
+            <form method="post" action="/api/demo/clear" className="danger-form">
+              <label>
+                <input type="checkbox" name="confirm" value="si" required /> Entiendo
+                que se borran todos los datos de demostración
+              </label>
+              <button type="submit">Borrar datos de demostración</button>
+            </form>
+          </div>
+        </Section>
+      ) : null}
+
+      {demoResult && DEMO_MESSAGE[demoResult] ? (
+        <p className={demoResult === 'error' ? 'error' : 'hint'} role="status">
+          {DEMO_MESSAGE[demoResult]}
+        </p>
+      ) : null}
     </main>
   )
 }

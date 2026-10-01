@@ -112,6 +112,7 @@ deducir sumando hechos pasados.
 | `requested_reviewers` | **Cuántos** revisores hay pedidos, no quiénes. |
 | `last_review_state` | Veredicto de la última revisión: aprobado, cambios pedidos, comentado. |
 | `created_at`, `ready_at`, `first_review_at`, `approved_at`, `merged_at`, `closed_at` | Los hitos del ciclo. Son lo que permite ver **dónde** se atasca el trabajo. |
+| `head_ref` | Rama de origen del PR. Solo se usa para reconocer las reversiones: el botón «Revert» de GitHub crea ramas `revert-<número>-…`. Es la única forma de detectarlas sin leer títulos ni mensajes. |
 
 ### Revisiones
 
@@ -124,13 +125,17 @@ deducir sumando hechos pasados.
 De los comentarios de revisión se guarda **quién** y **cuándo**, nunca el texto. Solo
 se cuentan, para medir profundidad de revisión.
 
+Las revisiones de bots y las que alguien hace de su propio PR se guardan, pero no
+cuentan en ninguna métrica: ni como primera revisión ni como carga de revisión.
+
 ### CI y despliegues
 
 | Campo | Qué es |
 |---|---|
 | `name`, `branch`, `status`, `conclusion` | Nombre del workflow y su resultado. |
 | `attempt`, `started_at`, `completed_at`, `duration_seconds` | Intento y duración. |
-| `environment`, `ref`, `is_rollback` | Entorno de despliegue y si fue una reversión. |
+| `environment`, `ref`, `is_rollback` | Entorno de despliegue y si fue una reversión. Solo cuentan los de producción. |
+| `status` | Si el despliegue salió bien o falló. Los fallidos cuentan para la tasa de fallo del cambio. |
 
 No se guardan registros de ejecución ni salidas de CI.
 
@@ -153,16 +158,31 @@ hashes y deducir los archivos. Protege la base de datos, no es anonimato fuerte.
 
 ## Cuánto tiempo se guarda
 
-- **90 días** de detalle.
-- Después, solo agregados mensuales.
+- **90 días** de detalle. El plazo está en la tabla `settings` (`retention_days`).
+- Después, solo los agregados por persona y día.
+- Los intentos de acceso al panel, **24 horas** (ver más abajo).
 - Los datos aún no enviados viven en tu PC, en
   `%ProgramData%\MedicionAgent\queue`, y se borran al desinstalar.
 
 ## Quién lo ve
 
-- Cada persona puede ver **sus propios datos** en el panel.
-- La vista agregada de equipo la ve quien administre el sistema.
+- **Todo el equipo ve lo mismo.** Hay una contraseña compartida y ninguna vista
+  privilegiada: los datos de quien pidió el sistema están en el mismo panel que los
+  de los demás.
 - La única tabla que asocia estos datos con un nombre es `people`.
+
+## Acceso al panel
+
+Para frenar a quien intente adivinar la contraseña, el panel bloquea un origen tras
+10 fallos en 15 minutos. Para contar los intentos guarda:
+
+| Campo | Qué es |
+|---|---|
+| `ip_hash` | HMAC de la IP con un secreto del servidor. **Nunca la IP**: sirve para contar intentos del mismo origen, no para saber quién es. |
+| `attempted_at`, `success` | Cuándo y si acertó. |
+
+Se borran a las 24 horas. La sesión dura 30 días; cambiar la contraseña cierra todas
+las sesiones abiertas.
 
 ## Cómo desactivarlo
 
@@ -174,8 +194,9 @@ panel.
 
 Solo el servidor del panel. Las tablas tienen las políticas de acceso activadas sin
 ninguna excepción, y las claves públicas de Supabase no tienen permiso sobre ninguna
-tabla ni vista. Está verificado asumiendo el rol público y comprobando que no puede
-leer nada.
+tabla ni vista, ni pueden ejecutar ninguna función. Está verificado asumiendo el rol
+público y comprobando que no puede leer ni ejecutar nada, y `db/verify.sh` lo
+comprueba en cada cambio.
 
 Esto importa porque, por defecto, Supabase deja cualquier tabla accesible a quien
 tenga la clave anónima, que es pública por diseño.
@@ -183,7 +204,7 @@ tenga la clave anónima, que es pública por diseño.
 ## Cómo comprobar que esto es verdad
 
 ```bash
-npm test          # tipos y 148 tests
+npm run check     # tipos y tests
 ./db/verify.sh    # aplica el esquema y comprueba los cálculos
 ```
 

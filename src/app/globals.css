@@ -159,6 +159,18 @@ td.zero { color: var(--text-muted); }
 }
 .error { color: var(--status-critical); font-size: 0.88rem; }
 
+.danger-form { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.danger-form label { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; }
+.danger-form button {
+  padding: 8px 14px;
+  font-size: 0.9rem;
+  border: 1px solid var(--status-critical);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--status-critical);
+  cursor: pointer;
+}
+
 footer {
   margin-top: 56px;
   padding-top: 20px;

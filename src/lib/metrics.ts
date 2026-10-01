@@ -180,6 +180,19 @@ export async function loadUnmappedActivity(): Promise<
   }[]
 }
 
+/**
+ * True si quedan datos de demostracion. Misma marca que usa el tablero en vivo
+ * para su aviso: los eventos sembrados llevan `meta.source = 'demo'`.
+ */
+export async function hasDemoData(): Promise<boolean> {
+  const { data } = await db()
+    .from('git_events')
+    .select('id')
+    .eq('meta->>source', 'demo')
+    .limit(1)
+  return (data ?? []).length > 0
+}
+
 /** Serie semanal de un campo del rollup, sumado a nivel de equipo. */
 export function weeklySeries(
   rollup: RollupRow[],

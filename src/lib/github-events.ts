@@ -16,6 +16,7 @@
  */
 
 import { createHmac } from 'node:crypto'
+import { isBotLogin } from './github'
 import type { PrPatch, PrState } from './pr-state'
 
 // ---------------------------------------------------------------------------
@@ -73,9 +74,12 @@ export function parsePullRequestState(
   // ordenar eventos del mismo PR entre si.
   const eventTs = iso(pr.updated_at) ?? iso(pr.created_at) ?? new Date().toISOString()
 
+  // Solo si vienen en el payload. El PR "simple" que traen los eventos de revision
+  // puede omitirlos, y tratarlos como `false` o `0` sacaria un borrador de su
+  // columna o borraria los revisores pedidos.
   const reviewers = Array.isArray(pr.requested_reviewers)
     ? pr.requested_reviewers.length
-    : null
+    : undefined
 
   return {
     repo,
@@ -83,8 +87,11 @@ export function parsePullRequestState(
     event_ts: eventTs,
     state,
     author_login: login((pr.user as { login?: string } | undefined)?.login),
-    draft: pr.draft === true,
+    draft: typeof pr.draft === 'boolean' ? pr.draft : undefined,
     head_sha: str((pr.head as { sha?: string } | undefined)?.sha, 64),
+    // Rama de origen: el boton "Revert" de GitHub crea `revert-<n>-<rama>`, y es
+    // la unica forma de detectar una reversion sin leer titulos ni mensajes.
+    head_ref: str((pr.head as { ref?: string } | undefined)?.ref, 255),
     base_ref: str((pr.base as { ref?: string } | undefined)?.ref),
     additions: int(pr.additions),
     deletions: int(pr.deletions),
@@ -94,7 +101,7 @@ export function parsePullRequestState(
     // fusion no deja que un nulo borre un valor bueno del job de sincronizacion.
     mergeable: typeof pr.mergeable === 'boolean' ? pr.mergeable : null,
     mergeable_state: str(pr.mergeable_state, 40),
-    requested_reviewers: reviewers ?? 0,
+    requested_reviewers: reviewers,
     created_at: iso(pr.created_at),
     // `ready_at` solo se fija en dos casos: al salir de borrador, o al abrirse un
     // PR que nunca fue borrador. Deducirlo de `draft === false` en cualquier otra
@@ -128,7 +135,7 @@ export interface ReviewRow {
 
 export function parseReviewEvent(
   payload: Record<string, unknown>,
-): { review: ReviewRow; pr: PrPatch } | null {
+): { review: ReviewRow; pr: PrPatch[] } | null {
   if (payload.action !== 'submitted') return null
 
   const repo = (payload.repository as { full_name?: string } | undefined)?.full_name
@@ -142,19 +149,23 @@ export function parseReviewEvent(
 
   const state = str(review.state, 40)?.toLowerCase() ?? null
   const externalId = review.id !== undefined ? String(review.id) : null
+  const reviewer = login((review.user as { login?: string } | undefined)?.login)
+  const author = login((pr.user as { login?: string } | undefined)?.login)
 
-  return {
-    review: {
-      dedup_key: `rv:${repo}:${number}:${externalId ?? submittedAt}`,
-      repo,
-      pr_number: number,
-      reviewer_login: login((review.user as { login?: string } | undefined)?.login),
-      pr_author_login: login((pr.user as { login?: string } | undefined)?.login),
-      state,
-      submitted_at: submittedAt,
-      external_id: externalId,
-    },
-    pr: {
+  const patches: PrPatch[] = []
+
+  // Ni una autorrevision ni la de un bot son la revision que se esta esperando.
+  // Un bot revisa a los segundos y hacia que el tiempo hasta la primera revision
+  // pareciera cero; el autor comentando su propio PR, igual.
+  const counts =
+    !isBotLogin(reviewer) &&
+    !(reviewer && author && reviewer.toLowerCase() === author.toLowerCase())
+
+  // La revision va ANTES que el estado del PR. El PR del payload lleva un
+  // `updated_at` igual o posterior a la revision; aplicado primero, haria que la
+  // revision pareciera un evento viejo y su veredicto se perdiera.
+  if (counts) {
+    patches.push({
       repo,
       number,
       event_ts: submittedAt,
@@ -164,7 +175,28 @@ export function parseReviewEvent(
       last_review_state: state === 'commented' ? undefined : state,
       first_review_at: submittedAt,
       approved_at: state === 'approved' ? submittedAt : undefined,
+    })
+  }
+
+  // El evento de revision trae el PR entero. Aplicarlo evita PRs fantasma: sin
+  // esto, la revision de un PR que el sistema aun no conocia creaba una fila
+  // "abierta" sin autor ni fecha, que se quedaba en el tablero aunque el PR
+  // llevara meses cerrado.
+  const base = parsePullRequestState(payload)
+  if (base) patches.push(base)
+
+  return {
+    review: {
+      dedup_key: `rv:${repo}:${number}:${externalId ?? submittedAt}`,
+      repo,
+      pr_number: number,
+      reviewer_login: reviewer,
+      pr_author_login: author,
+      state,
+      submitted_at: submittedAt,
+      external_id: externalId,
     },
+    pr: patches,
   }
 }
 
@@ -351,6 +383,8 @@ export interface DeploymentRow {
   sha: string | null
   source: string
   deployed_at: string
+  /** success | failure | error. Los fallidos cuentan para la tasa de fallo. */
+  status: string
   is_rollback: boolean
   external_id: string | null
 }
@@ -376,12 +410,21 @@ export function parseReleaseEvent(
     sha: null,
     source: 'release',
     deployed_at: publishedAt,
+    status: 'success',
     is_rollback: false,
     external_id: release.id !== undefined ? String(release.id) : null,
   }
 }
 
-/** `deployment_status` con estado `success` es la senal mas fiable si la usan. */
+/**
+ * `deployment_status`: la senal mas fiable de despliegue si se usa.
+ *
+ * Se guardan tambien los FALLIDOS. Antes solo entraban los exitosos, asi que la
+ * tasa de fallo del cambio no tenia de donde salir y daba siempre 0 %.
+ *
+ * Los estados intermedios (`pending`, `in_progress`, `queued`) se ignoran: el
+ * mismo despliegue manda varios, y solo el final dice algo.
+ */
 export function parseDeploymentStatusEvent(
   payload: Record<string, unknown>,
 ): DeploymentRow | null {
@@ -389,19 +432,26 @@ export function parseDeploymentStatusEvent(
   const status = payload.deployment_status as Record<string, unknown> | undefined
   const deployment = payload.deployment as Record<string, unknown> | undefined
   if (typeof repo !== 'string' || !status || !deployment) return null
-  if (status.state !== 'success') return null
+
+  const state = str(status.state, 40)
+  if (state !== 'success' && state !== 'failure' && state !== 'error') return null
 
   const at = iso(status.created_at) ?? iso(deployment.created_at)
   if (!at) return null
 
   return {
+    // La clave es el despliegue, no el estado: si un despliegue falla y se
+    // reintenta con exito, el resultado final sustituye al anterior (upsert).
     dedup_key: `dep:${repo}:${String(deployment.id ?? at)}`,
     repo,
+    // Vercel nombra los entornos "Production – proyecto" o "Preview – proyecto".
+    // La base de datos decide que es produccion (columna is_production).
     environment: str(deployment.environment, 100),
     ref: str(deployment.ref, 255),
     sha: str(deployment.sha, 64),
     source: 'deployment_status',
     deployed_at: at,
+    status: state,
     is_rollback: false,
     external_id: deployment.id !== undefined ? String(deployment.id) : null,
   }

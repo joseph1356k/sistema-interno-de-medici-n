@@ -7,8 +7,9 @@ automatizar, porque implican secretos que solo una persona puede leer.
 
 | Pieza | Estado |
 |---|---|
-| Base de datos | Proyecto Supabase `medicion-interna` (eu-west-1), 7 migraciones aplicadas |
-| Acceso público | **Cerrado**: RLS en las 13 tablas, cero permisos para las claves públicas, verificado asumiendo el rol `anon` |
+| Base de datos | Proyecto Supabase `medicion-interna` (eu-west-1), 8 migraciones |
+| Acceso público | **Cerrado**: RLS en todas las tablas; las claves públicas no pueden leer ninguna tabla ni vista ni ejecutar ninguna función. Verificado asumiendo el rol `anon`, y `db/verify.sh` lo comprueba en cada cambio |
+| Zona horaria | Los días se cortan en `America/Bogota` (ver «Zona horaria», abajo) |
 | Datos de demostración | 16 semanas sembradas: 155 PRs, 283 ejecuciones de CI, 367 días agregados |
 | Panel | Desplegado en Vercel, responde HTTP 200 |
 | Protección de Vercel | Desactivada a propósito (bloquearía los webhooks y la telemetría); el panel tiene su propia contraseña |
@@ -73,14 +74,13 @@ insert into people (display_name, git_emails, github_login) values
 
 ## Paso 4 — Borrar los datos de demostración
 
-Cuando ya entren datos reales:
-
-```bash
-psql "$DATABASE_URL" -f db/seed/clear.sql
-```
+Cuando ya entren datos reales: vista **Salud** → **Datos de demostración** → marcar la
+casilla → **Borrar datos de demostración**. Solo borra las filas marcadas como demo;
+los datos reales no se tocan.
 
 El panel muestra un aviso amarillo mientras existan, así que no hay riesgo de
-confundirlos con datos de verdad.
+confundirlos con datos de verdad. Sin el panel, lo mismo desde SQL:
+`select clear_demo_data();`
 
 ## Paso 5 — Los PCs
 
@@ -141,6 +141,41 @@ Para verlo en crudo, ejecuta el collector con
 [`agent/otelcol/config.debug.yaml`](../agent/otelcol/config.debug.yaml), que imprime
 por consola en vez de enviar.
 
+## Ajustes
+
+### Zona horaria
+
+«Hoy» y los cortes de cada día se calculan en la zona del equipo, no en UTC. Con UTC,
+en un equipo en América la vista «Ahora» se vaciaba cada tarde porque el día ya había
+cambiado. Para cambiarla, en el SQL Editor de Supabase:
+
+```sql
+select set_team_timezone('America/Mexico_City');
+```
+
+Valida el nombre (tiene que ser una zona IANA) y recalcula los días que aún tienen
+detalle, para que el histórico quede cortado igual que lo nuevo.
+
+### Retención
+
+90 días de detalle; después solo quedan los agregados por persona y día. Para
+cambiar el plazo:
+
+```sql
+update settings set value = '120', updated_at = now() where key = 'retention_days';
+```
+
+La variable `RETENTION_DAYS` de Vercel ya no se usa: el plazo vive en la base, porque
+el recálculo de días antiguos necesita saberlo para no vaciar los ya purgados. Se
+puede borrar.
+
+### Contraseña del panel
+
+Es `DASHBOARD_PASSWORD` en Vercel. Para cambiarla: edita la variable y redespliega.
+Al cambiarla se cierran todas las sesiones abiertas. Las sesiones duran 30 días, y
+tras 10 intentos fallidos en 15 minutos desde un mismo origen se bloquea el acceso
+durante 15 minutos.
+
 ## Opcional
 
 ### Reconciliación horaria
@@ -188,6 +223,7 @@ Todos en las variables de entorno de Vercel. Ninguno en el repositorio.
 | `SUPABASE_URL` | Base de datos | ya configurado |
 | `SUPABASE_SERVICE_ROLE_KEY` | Base de datos | **tú** (paso 1) |
 | `DASHBOARD_PASSWORD` | Entrar al panel | ya configurado |
+| `SESSION_SECRET` | Firma las sesiones del panel | ya configurado |
 | `INGEST_TOKEN` | Lo presentan los PCs | ya configurado |
 | `GITHUB_WEBHOOK_SECRET` | Firma del webhook | ya configurado |
 | `CRON_SECRET` | Protege el cron | ya configurado |

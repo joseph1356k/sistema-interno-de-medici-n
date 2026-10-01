@@ -29,6 +29,7 @@ export interface PrSnapshot {
   state: PrState
   draft: boolean
   head_sha: string | null
+  head_ref: string | null
   base_ref: string | null
   additions: number | null
   deletions: number | null
@@ -69,6 +70,7 @@ const CURRENT = [
   'author_login',
   'draft',
   'head_sha',
+  'head_ref',
   'base_ref',
   'additions',
   'deletions',
@@ -95,6 +97,7 @@ function empty(repo: string, number: number, event_ts: string): PrSnapshot {
     state: 'open',
     draft: false,
     head_sha: null,
+    head_ref: null,
     base_ref: null,
     additions: null,
     deletions: null,
@@ -164,6 +167,29 @@ export function mergePrState(
   if (result.merged_at && result.state !== 'merged') result.state = 'merged'
 
   return result
+}
+
+/**
+ * PR que la base cree abiertos y GitHub ya no lista como abiertos.
+ *
+ * Son los "fantasma": se cerraron o mergearon mientras el webhook estaba caido o
+ * antes de configurarlo, y sin esto se quedarian para siempre en el tablero como
+ * atascados. Hay que pedirlos uno a uno para saber como acabaron.
+ *
+ * Solo se puede afirmar que falta uno si el listado de GitHub esta COMPLETO: si
+ * vino cortado por la paginacion, un PR ausente puede seguir abierto. El tope
+ * limita las peticiones a la API por repositorio y ejecucion; los que no entren
+ * se revisan en la siguiente.
+ */
+export function ghostCandidates(
+  openInDb: number[],
+  openInGithub: number[],
+  githubListComplete: boolean,
+  cap = 20,
+): number[] {
+  if (!githubListComplete) return []
+  const open = new Set(openInGithub)
+  return openInDb.filter((n) => !open.has(n)).slice(0, cap)
 }
 
 /**

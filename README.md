@@ -95,7 +95,7 @@ src/lib/
   analytics.ts      cargadores de las vistas
   jobs.ts           trabajos programados
 db/
-  migrations/       7 migraciones
+  migrations/       8 migraciones
   verify.sh         aplica el esquema y comprueba los cálculos con aserciones
   seed/demo.sql     16 semanas de datos de demostración
 installer/
@@ -109,7 +109,7 @@ agent/otelcol/      configuración del collector, con el filtro de privacidad
 
 ```bash
 npm install
-npm run check        # tipos + 148 tests
+npm run check        # tipos + tests
 ./db/verify.sh       # esquema y cálculos, contra un Postgres local
 npm run dev
 ```
@@ -123,7 +123,9 @@ Los tests que importan:
 | `tests/pr-state.test.ts` | Que una secuencia **desordenada** de webhooks deja el estado correcto |
 | `tests/forecast.test.ts` | Que las proyecciones se **niegan** con pocos datos, y que los percentiles no se invierten |
 | `tests/allowlist-sync.test.ts` | Que el filtro del PC y el del servidor no se han separado, y que `PRIVACY.md` no miente por omisión |
-| `db/verify.sql` | Valores de cada métrica comprobados a mano una vez, fijados como aserciones |
+| `tests/security.test.ts` | Que la sesión caduca y no se puede falsificar ni alargar, y que el cron sin secreto lo rechaza todo |
+| `tests/live.test.ts` | Que una ráfaga de eventos cuesta un solo recálculo del tablero sin perder el último |
+| `db/verify.sql` | Valores de cada métrica comprobados a mano una vez, fijados como aserciones; y que la clave pública no lee ni ejecuta nada |
 
 **Si cambias [`src/lib/allowlist.ts`](src/lib/allowlist.ts)**, hay que actualizar en el
 mismo commit `agent/otelcol/config.yaml` y `PRIVACY.md`. Los tests fallan si no.

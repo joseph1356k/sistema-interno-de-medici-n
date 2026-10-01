@@ -66,7 +66,11 @@ export default async function EntregaPage() {
             label="Frecuencia de despliegue"
             value={fmt(d.dora.deploysPerWeek, 1)}
             unit="/semana"
-            note={d.dora.deploysPerWeek === null ? 'sin despliegues registrados' : undefined}
+            note={
+              d.dora.deploysPerWeek === null
+                ? 'sin despliegues de producción registrados'
+                : 'solo producción'
+            }
           />
           <Kpi
             label="Lead time del cambio"
@@ -80,7 +84,11 @@ export default async function EntregaPage() {
           <Kpi
             label="Tasa de fallo del cambio"
             value={pct(d.dora.changeFailureRate)}
-            note="despliegues revertidos"
+            note={
+              d.dora.changeFailureRate === null
+                ? 'necesita despliegues de producción'
+                : 'fallos y reversiones por despliegue'
+            }
           />
           <Kpi
             label="Tiempo de restauración"
@@ -88,6 +96,14 @@ export default async function EntregaPage() {
             note="de CI en rojo a verde"
           />
         </div>
+        <ReadingNote>
+          Solo cuentan los despliegues a <strong>producción</strong>: los de preview
+          inflarían la frecuencia sin que nada llegue a nadie. Un cambio cuenta como
+          fallido si su despliegue falló, si se volvió a desplegar una versión anterior
+          (reversión), si se marcó a mano como reversión o si se mergeó un PR creado con
+          el botón «Revert» de GitHub. Todo sale de metadatos: no se lee ningún mensaje
+          ni título.
+        </ReadingNote>
       </Section>
 
       <Section
@@ -171,19 +187,23 @@ export default async function EntregaPage() {
         <Section title="Calidad de la entrega">
           <div className="card">
             <table>
-              <caption>PR abandonados frente a mergeados, por semana.</caption>
+              <caption>
+                PR abandonados frente a mergeados, y mergeados sin que otra persona los
+                revisara, por semana.
+              </caption>
               <thead>
                 <tr>
                   <th scope="col">Semana</th>
                   <th scope="col">Mergeados</th>
                   <th scope="col">Abandonados</th>
                   <th scope="col">Tasa</th>
+                  <th scope="col">Sin revisión</th>
                 </tr>
               </thead>
               <tbody>
                 {d.quality.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="empty">
+                    <td colSpan={5} className="empty">
                       Sin PR cerrados en el periodo.
                     </td>
                   </tr>
@@ -194,12 +214,20 @@ export default async function EntregaPage() {
                       <td className="num">{int(q.merged)}</td>
                       <td className="num">{int(q.abandoned)}</td>
                       <td className="num">{pct(q.abandonRate)}</td>
+                      <td className={`num ${q.mergedWithoutReview ? '' : 'zero'}`}>
+                        {q.mergedWithoutReview || '—'}
+                      </td>
                     </tr>
                   ))
                 )}
               </tbody>
             </table>
           </div>
+          <ReadingNote>
+            «Sin revisión» es un riesgo del proceso, no de quien mergea: suele pasar
+            cuando no hay nadie libre para revisar. No cuentan ni las revisiones de bots
+            ni las del propio autor.
+          </ReadingNote>
         </Section>
 
         <Section title="Retrabajo">

@@ -86,9 +86,9 @@ export default async function PersonPage({
           note="Mediana"
         />
         <Kpi
-          label="Coste de herramientas"
+          label="Coste equivalente"
           value={`$${fmt(me?.cost_usd ?? 0, 2)}`}
-          note="Aproximado"
+          note="A precio de API, no es factura"
         />
       </div>
 
