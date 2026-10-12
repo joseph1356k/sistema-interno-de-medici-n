@@ -111,6 +111,26 @@ const attr = (key: string, value: string | number | boolean) => ({
 // La ruta usa el reloj real: los datos van fechados una hora antes de ahora.
 const NANOS = String((Date.now() - 3_600_000) * 1e6)
 
+describe('rutas a las que envia el collector', () => {
+  // El exportador otlphttp anade /v1/metrics y /v1/logs al endpoint configurado.
+  // Sin estas rutas, toda la telemetria de los PCs acababa en 404.
+  it('/v1/metrics y /v1/logs son la misma ingesta', async () => {
+    const { POST: metricsRoute } = await import('@/app/api/ingest/otlp/v1/metrics/route')
+    const { POST: logsRoute } = await import('@/app/api/ingest/otlp/v1/logs/route')
+    expect(metricsRoute).toBe(otlpRoute)
+    expect(logsRoute).toBe(otlpRoute)
+  })
+
+  it('el collector apunta a la ruta base y el exportador anade el sufijo', async () => {
+    const { readFileSync } = await import('node:fs')
+    const config = readFileSync('agent/otelcol/config.yaml', 'utf8')
+    // Si alguien cambia a metrics_endpoint/logs_endpoint, el sufijo ya no se anade
+    // y estas rutas sobrarian: el test obliga a revisarlo.
+    expect(config).toMatch(/otlphttp\/central:\s*\n\s*endpoint: \$\{env:INGEST_ENDPOINT\}/)
+    expect(config).not.toMatch(/metrics_endpoint|logs_endpoint/)
+  })
+})
+
 describe('POST /api/ingest/otlp', () => {
   it('rechaza sin token y con token incorrecto', async () => {
     const sinToken = new Request('http://localhost/api/ingest/otlp', {

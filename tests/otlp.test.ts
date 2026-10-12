@@ -212,6 +212,7 @@ describe('parseOtlp: eventos', () => {
           attributes: [attr('event.name', 'codex.conversation_starts')],
         },
       ]),
+      NOW,
     )
     expect(events[0]!.event_name).toBe('codex.conversation_starts')
   })
@@ -247,6 +248,7 @@ describe('parseOtlp: eventos', () => {
           ],
         },
       ]),
+      NOW,
     )
     expect(events[0]!.session_id).toBe('conv-abc-123')
   })
@@ -262,6 +264,7 @@ describe('parseOtlp: eventos', () => {
           ],
         },
       ]),
+      NOW,
     )
     expect(events[0]!.session_id).toBeNull()
   })
@@ -274,6 +277,7 @@ describe('parseOtlp: eventos', () => {
           attributes: [attr('event.name', 'codex.api_request')],
         },
       ]),
+      NOW,
     )
     expect(events[0]!.occurred_at).toBe('2026-09-26T10:00:00.000Z')
   })
