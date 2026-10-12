@@ -1,14 +1,13 @@
 # Puesta en marcha
 
-Estado actual y qué falta. El paso 0 lo puede hacer Claude con los conectores de
-Supabase y Vercel autorizados; los pasos 1 y 2 implican secretos que solo una persona
-puede leer.
+Estado actual y qué falta. Los pasos 0 a 2 los tiene que hacer una persona: implican
+confirmar cambios en la base de datos o secretos que solo ella puede leer.
 
 ## Lo que ya está hecho
 
 | Pieza | Estado |
 |---|---|
-| Base de datos | Proyecto Supabase `medicion-interna` (eu-west-1). Migraciones 0001–0007 aplicadas; **la 0008 está en el repositorio y se aplica en el paso 0** |
+| Base de datos | Proyecto Supabase `medicion-interna` (eu-west-1). Migraciones 0001–0007 y las secciones 1 a 5 de la 0008 aplicadas (12 de octubre); **el resto de la 0008 se aplica en el paso 0** |
 | Acceso público | **Cerrado**: RLS en todas las tablas; las claves públicas no pueden leer ninguna tabla ni vista ni ejecutar ninguna función. Verificado asumiendo el rol `anon`, y `db/verify.sh` lo comprueba en cada cambio |
 | Zona horaria | Se fija en el paso 0 (`America/Bogota`; ver «Zona horaria», abajo) |
 | Instalador | Construido y verificado en CI: Actions → **Construir instalador** → artefacto `instalador-agente` (68 MB, dura 30 días) |
@@ -26,24 +25,27 @@ la CI, pero la base de datos y producción siguen en la versión anterior. **El 
 importa:** primero la base y después el despliegue, porque el código nuevo escribe
 columnas que crea la 0008.
 
-La forma corta: autoriza los conectores de Supabase y de Vercel (este último con
-acceso al equipo del proyecto) en [claude.ai](https://claude.ai/customize/connectors),
-abre una sesión nueva sobre esta rama y pide «aplica el paso 0 de
-docs/puesta-en-marcha.md».
+1. **Base de datos (2 minutos).** Supabase → `medicion-interna` → **SQL Editor** →
+   pega el contenido de
+   [`db/manual/0008_partes_2_a_4.sql`](../db/manual/0008_partes_2_a_4.sql) → **Run**.
+   Las secciones 1 a 5 de la 0008 ya están aplicadas; este archivo trae el resto y,
+   al final, fija la zona horaria (`America/Bogota`; cámbiala en la última línea si
+   el equipo está en otra). Si el editor avisa de operaciones destructivas es por los
+   `DROP FUNCTION`, que reemplazan funciones antiguas: no se borra ningún dato.
+   Para comprobarlo: `select team_tz();` debe devolver la zona elegida.
 
-A mano:
-
-1. Supabase → `medicion-interna` → **SQL Editor** → pega el contenido de
-   [`db/migrations/0008_calidad.sql`](../db/migrations/0008_calidad.sql) → **Run**.
-2. En el mismo editor, la zona horaria del equipo:
-   `select set_team_timezone('America/Bogota');`
-3. Vercel → **Settings** → **Environment Variables**: cambia `DASHBOARD_PASSWORD` por
+   Por qué a mano: el conector de Supabase de Claude pide confirmar las sentencias
+   destructivas, y en la sesión del 12 de octubre esa confirmación nunca llegó a
+   aplicarse: cada intento agotó el tiempo sin ejecutar nada.
+2. Vercel → **Settings** → **Environment Variables**: cambia `DASHBOARD_PASSWORD` por
    una contraseña larga y aleatoria, y añade `SESSION_SECRET` (aleatorio, 64
    caracteres). Las dos en los tres entornos.
-4. Despliega la rama a producción. Vercel → **Deployments** → la última de la rama
+3. Despliega la rama a producción. Vercel → **Deployments** → la última de la rama
    `claude/affectionate-davinci-p7v9g3` → **⋯** → **Promote to Production**. Si no
    aparece ninguna de esa rama, en **Settings** → **Git** pon esa rama como
-   *Production Branch* y vuelve a desplegar.
+   *Production Branch* y vuelve a desplegar. También lo puede hacer Claude si el
+   conector de Vercel tiene acceso al equipo del proyecto
+   ([claude.ai](https://claude.ai/customize/connectors)).
 
 Para comprobarlo: `/login` debe pedir la contraseña nueva, y la vista **Salud** debe
 mostrar la sección «Datos de demostración».
